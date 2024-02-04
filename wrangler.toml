@@ -1,6 +1,6 @@
 main = "./src/index.ts"
 name = "worker-typescript-template"
-compatibility_date = "2022-07-26"
+compatibility_date = "2023-12-01"
 kv_namespaces = [
     { binding = "s3proxy_cache", id = "70e5392520624e0fa4f7048d8156f10b" }
 ]

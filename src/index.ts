@@ -83,6 +83,7 @@ async function getSignedUrlForObject(
  * @throws {Error} If the M3U8 file or the bucket name is not provided.
  */
 async function replaceFilesInM3U8(
+	basePath: string,
 	m3u8: string,
 	bucket: string,
 ): Promise<string> {
@@ -90,13 +91,23 @@ async function replaceFilesInM3U8(
 		throw new Error("No M3U8 file or bucket provided");
 	}
 
+	let pathInBucket = "";
 	const lines = m3u8.split("\n");
 	const promises = [] as { signedUrl: Promise<string>; line: number }[];
 
+	// Check if the base path is the bucket
+	if ( basePath.split("/")[0] == bucket) {
+		// Remove the bucket name from the base path
+		pathInBucket = basePath.split("/").slice(1).join("/") + "/";
+	} else {
+		// Will use the default bucket
+		pathInBucket = "";
+	}
+	pathInBucket = basePath.split("/").slice(1).join("/") + "/";
 	lines.forEach((line, index) => {
 		const match = line.match(SEGMENTS_REGEX);
 		if (match) {
-			const promise = getSignedUrlForObject(bucket, match[0]);
+			const promise = getSignedUrlForObject(bucket, `${pathInBucket}${match[0]}`);
 			promises.push({ signedUrl: promise, line: index });
 		}
 	});
@@ -120,6 +131,12 @@ async function replaceFilesInM3U8(
 	}
 }
 
+function getBasePath(request: Request): string {
+	const urlObj = new URL(request.url);
+	const path = urlObj.pathname.split("/").slice(0, -1).join("/").substring(1);
+	console.log(`Base path: ${path}`);
+	return path;
+}
 /**
  *
  * Replace the URLs of the M3U8 file with localhost
@@ -144,7 +161,7 @@ function replaceM3u8Urls(request: Request, m3u8: string): string {
 	m3u8 = m3u8.replace(M3U8_REGEX, (match) => {
 		// Check if the match looks like a URL
 		const isUrl = URL_REGEX.test(match);
-		const path = url.pathname.split("/").slice(0, -1).join("/");
+		const path = getBasePath(request);
 		if (!isUrl) {
 			return `${host}/${path}/${match}`;
 		}
@@ -172,7 +189,6 @@ async function getSignedM3u8(request: Request, bucket: string, key: string) {
 		const clearM3uRequest = await s3Client.send(
 			new GetObjectCommand({ Bucket: bucket, Key: key }),
 		);
-
 		if (!clearM3uRequest.Body) {
 			// If the M3U8 file is empty, throw an error
 			throw new Error("No body");
@@ -180,6 +196,7 @@ async function getSignedM3u8(request: Request, bucket: string, key: string) {
 
 		const clearM3u8 = await clearM3uRequest.Body?.transformToString();
 		const signedM3u8 = await replaceFilesInM3U8(
+			getBasePath(request),
 			clearM3u8,
 			s3Config.videoBucket,
 		);
