@@ -1,0 +1,14 @@
+#!/bin/bash
+#1-store
+cd $PROJECT_ROOT
+if [ -z "${CRYPTOKEN}" ]; then
+    echo "CRYPTOKEN is empty: $CRYPTOKEN"
+    exit -1
+fi
+tar -cvJf _sensitive_datas/_sensitive_datas.tar.xz .vscode/launch.json .vscode/settings.json ./launch-* ./*.pem ./*.key .wrangler/ crowdin.yml
+#2-encrypt
+openssl aes-256-cbc -base64 -md sha256 -pass pass:"$CRYPTOKEN" -in _sensitive_datas/_sensitive_datas.tar.xz -out _sensitive_datas/_sensitive_datas.tar.xz.enc
+#3-delete 
+rm _sensitive_datas/_sensitive_datas.tar.xz
+
+echo "CRYPTED with 'openssl aes-256-cbc -base64 -md sha256 -pass pass:\"$CRYPTOKEN\"'"
