@@ -30,7 +30,9 @@ The S3 client configuration is done via the `s3-config.json` file. You need to p
         "accessKeyId": "your-access-key-id",
         "secretAccessKey": "your-secret-access-key"
     },
-    "endpoint": "your-s3-endpoint"
+    "endpoint": "your-endpoint",
+    "expiration": "your-expiration-time",
+    "videoBucket": "your-default-bucket-name"
 }
 ```
 
@@ -44,7 +46,35 @@ The cache can be cleared by adding a `?clear-cache` query parameter to the reque
 
 ## Usage
 
-Deploy the Cloudflare worker with this code, then make a request to the worker's URL with the path to the M3U8 file in the S3 bucket.
+Deploy the Cloudflare worker with this code, then make a request to the worker's URL with the path to the M3U8 file in the S3 bucket.  
+First, you need to create the wrangler.toml file with the following content:
+
+```toml
+main = "./src/index.ts"
+name = "your-worker-name"
+compatibility_date = "your-compatibility-date"
+kv_namespaces = [
+    { binding = "s3proxy_cache", id = "your-id" }
+]
+[build]
+command = "your-build-command"
+```
+
+You also need to create a kv namespace with the name `s3proxy_cache` and the id `your-id` in the Cloudflare dashboard.
+
+```bash
+npx wrangler kv:namespace create "s3proxy_cache"
+```
+
+Replace the id `your-id` with the id of the created namespace.  
+Then you can deploy the worker with the following command:
+
+```bash
+With the command:
+
+```bash
+npx wrangler deploy
+```
 
 ## HLS Videos generation
 

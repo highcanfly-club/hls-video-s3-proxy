@@ -67,3 +67,4 @@ src/config/siteConf.json
 functions/common/config/up2pay.json
 src/config/up2pay.json
 .wrangler
+wrangler.toml

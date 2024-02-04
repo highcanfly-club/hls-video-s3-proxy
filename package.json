@@ -1,5 +1,5 @@
 {
-	"name": "get-s3-video-urls",
+	"name": "hls-video-s3-proxy",
 	"version": "1.0.0",
 	"description": "Cloudflare worker TypeScript template",
 	"type": "module",
