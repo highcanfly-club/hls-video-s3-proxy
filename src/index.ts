@@ -96,7 +96,7 @@ async function replaceFilesInM3U8(
 	const promises = [] as { signedUrl: Promise<string>; line: number }[];
 
 	// Check if the base path is the bucket
-	if ( basePath.split("/")[0] == bucket) {
+	if (basePath.split("/")[0] == bucket) {
 		// Remove the bucket name from the base path
 		pathInBucket = basePath.split("/").slice(1).join("/") + "/";
 	} else {
@@ -235,75 +235,95 @@ function isClearCodeValid(clearCode: string | null): boolean {
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
-		const url = new URL(request.url);
-		const path = new URL(request.url).pathname;
-		const requestedM3u = path.substring(1); // Remove leading slash
-		let bucket = s3Config.videoBucket; // Default bucket
-		let key = requestedM3u; // Default to key if no path is provided
-		let signedM3u = "" as string | null; // Default to empty string
+		if (request.method === "GET") {
+			const url = new URL(request.url);
+			const path = new URL(request.url).pathname;
+			const requestedM3u = path.substring(1); // Remove leading slash
+			let bucket = s3Config.videoBucket; // Default bucket
+			let key = requestedM3u; // Default to key if no path is provided
+			let signedM3u = "" as string | null; // Default to empty string
 
-		if (requestedM3u.includes("/")) {
-			bucket = requestedM3u.split("/")[0]; // Get the bucket from the path
-			key = requestedM3u.substring(requestedM3u.indexOf("/") + 1); // Get the key from the path
-			console.log(`Bucket: ${bucket}, Key: ${key}`);
-		}
-
-		// Input validation
-		if (key && !key.match(/\.m3u8$/)) {
-			throw new Error("No m3u requested");
-		}
-
-		const params = url.searchParams;
-		const clearCache = params.get("clear-cache");
-		if (clearCache) {
-			// Clear the cache if the correct secret is provided
-			if (isClearCodeValid(clearCache)) {
-				// force clearing this key from the cache
-				console.log(`Clearing cache for ${bucket}/${key}`);
-				await env.s3proxy_cache.delete(`${bucket}/${key}`);
+			if (requestedM3u.includes("/")) {
+				bucket = requestedM3u.split("/")[0]; // Get the bucket from the path
+				key = requestedM3u.substring(requestedM3u.indexOf("/") + 1); // Get the key from the path
+				console.log(`Bucket: ${bucket}, Key: ${key}`);
 			}
-		}
 
-		// Error handling
-		if (!s3Config || !s3Config.videoBucket) {
-			throw new Error("Invalid S3 configuration");
-		}
+			// Input validation
+			if (key && !key.match(/\.m3u8$/)) {
+				throw new Error("No m3u requested");
+			}
 
-		// Get signed M3U
-		try {
-			// Create a cache key from the bucket and key
-			const cacheKey = `${bucket}/${key}`;
+			const params = url.searchParams;
+			const clearCache = params.get("clear-cache");
+			if (clearCache) {
+				// Clear the cache if the correct secret is provided
+				if (isClearCodeValid(clearCache)) {
+					// force clearing this key from the cache
+					console.log(`Clearing cache for ${bucket}/${key}`);
+					await env.s3proxy_cache.delete(`${bucket}/${key}`);
+				}
+			}
 
-			// Try to get the signed M3U from the cache
-			signedM3u = await env.s3proxy_cache.get(cacheKey);
+			// Error handling
+			if (!s3Config || !s3Config.videoBucket) {
+				throw new Error("Invalid S3 configuration");
+			}
 
-			// If the signed M3U is not in the cache, generate it, cache it, and return it
-			if (!signedM3u) {
-				console.log("Cache miss");
-				signedM3u = requestedM3u
-					? await getSignedM3u8(request, bucket, key)
-					: "";
-				await env.s3proxy_cache.put(cacheKey, signedM3u, {
-					expirationTtl: s3Config.expiration
-						? parseInt(s3Config.expiration) - EXPIRATION_MARGIN
-						: EXPIRATION_DEFAULT - EXPIRATION_MARGIN,
+			// Get signed M3U
+			try {
+				// Create a cache key from the bucket and key
+				const cacheKey = `${bucket}/${key}`;
+
+				// Try to get the signed M3U from the cache
+				signedM3u = await env.s3proxy_cache.get(cacheKey);
+
+				// If the signed M3U is not in the cache, generate it, cache it, and return it
+				if (!signedM3u) {
+					console.log("Cache miss");
+					signedM3u = requestedM3u
+						? await getSignedM3u8(request, bucket, key)
+						: "";
+					await env.s3proxy_cache.put(cacheKey, signedM3u, {
+						expirationTtl: s3Config.expiration
+							? parseInt(s3Config.expiration) - EXPIRATION_MARGIN
+							: EXPIRATION_DEFAULT - EXPIRATION_MARGIN,
+					});
+				} else {
+					console.log("Cache hit");
+				}
+
+				// Check if getSignedM3u returned a non-empty string
+				if (!signedM3u) {
+					throw new Error("Failed to get signed M3U");
+				}
+
+				return new Response(signedM3u, {
+					headers: {
+						"Content-Type": HSL_MIME_TYPE,
+						"Access-Control-Allow-Origin": "*",
+						"Access-Control-Allow-Methods": "GET, OPTIONS",
+						"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+						"Access-Control-Max-Age": "86400", // 24 hours 
+					},
 				});
-			} else {
-				console.log("Cache hit");
+			} catch (error) {
+				// Handle asynchronous errors
+				console.error(error);
+				return new Response("An error occurred", { status: 500 });
 			}
-
-			// Check if getSignedM3u returned a non-empty string
-			if (!signedM3u) {
-				throw new Error("Failed to get signed M3U");
-			}
-
-			return new Response(signedM3u, {
-				headers: { "Content-Type": HSL_MIME_TYPE },
+		} else if (request.method === "OPTIONS") {
+			return new Response(null, {
+				headers: {
+					"Access-Control-Allow-Origin": "*",
+					"Access-Control-Allow-Methods": "GET, OPTIONS",
+					"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+					"Access-Control-Max-Age": "86400", // 24 hours
+				},
 			});
-		} catch (error) {
-			// Handle asynchronous errors
-			console.error(error);
-			return new Response("An error occurred", { status: 500 });
 		}
-	},
-};
+		else {
+			return new Response("Method not allowed", { status: 405 });
+		}
+	}
+}
