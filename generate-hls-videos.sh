@@ -48,19 +48,30 @@
 generate_multi_resolution_hls() {
     HLS_SEGMENT_LENGTH=6
     # UUID="8DCDE049-2F20-4EEA-BE4C-CE6504BC2BAA"
-    
+
     declare -A resolutions
-    resolutions["240"]="136x240"
-    resolutions["640"]="360x640"
-    resolutions["960"]="540x960"
-    resolutions["1280"]="720x1280"
-    resolutions["1920"]="1080x1920"
-    resolutions["3840"]="2160x3840"
+    # resolutions["240"]="136x240"
+    # resolutions["640"]="360x640"
+    # resolutions["960"]="540x960"
+    # resolutions["1280"]="720x1280"
+    # resolutions["1920"]="1080x1920"
+    # resolutions["3840"]="2160x3840"
+    resolutions["136"]="240x136"
+    resolutions["360"]="640x360"
+    resolutions["540"]="960x540"
+    resolutions["720"]="1280x720"
+    resolutions["1080"]="1920x1080"
+    resolutions["2160"]="3840x2160"
     input=$1
     base_name=$(basename "$input" .mp4)
 
     if [[ -z $UUID ]]; then
-        UUID=$(uuidgen)
+
+        if [[ -d "${base_name}" ]]; then
+            UUID=$(uuidgen)
+        else
+            UUID=${base_name}
+        fi
         mkdir -p ./$UUID
         # Encode video in multiple resolutions
         for resolution_hxv in "${resolutions[@]}"; do
@@ -115,4 +126,5 @@ generate_multi_resolution_hls() {
         IFS=,
         echo "${multiresolution_json[*]}"
     )"}" >"${UUID}/keys.json"
+    unset UUID
 }
