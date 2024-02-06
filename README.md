@@ -21,7 +21,7 @@ The proxy receives a request for an M3U8 file. It fetches the M3U8 file from the
 
 ## Configuration
 
-The S3 client configuration is done via the `s3-config.json` file. You need to provide the following information:
+The S3 client configuration is done via the `src/s3-config.json` file. You need to provide the following information:
 
 ```json
 {
@@ -31,8 +31,23 @@ The S3 client configuration is done via the `s3-config.json` file. You need to p
         "secretAccessKey": "your-secret-access-key"
     },
     "endpoint": "your-endpoint",
-    "expiration": "your-expiration-time",
+    "expiration": "your-expiration-ttl-in-seconds",
     "videoBucket": "your-default-bucket-name"
+}
+```
+
+for example for idrivee2 S3 bucket with Paris region, the configuration is as follows (note us-east-1 is not the correct region but idrivee2 uses the region in the endpoint and AWS SDK requires it so any value is accepted for the region field):
+
+```json
+{
+    "region": "us-east-1",
+    "credentials": {
+        "accessKeyId": "DYzO2ETMyoSvut729YKP",
+        "secretAccessKey": "KJ3ETGF7X1faOcOhzDFauQH4hwybO2tIp9HhOI3P"
+    },
+    "endpoint": "https://l2e5.par.idrivee2-18.com",
+    "expiration": "604800",
+    "videoBucket": "my-videos"
 }
 ```
 
