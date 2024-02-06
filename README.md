@@ -69,7 +69,6 @@ npx wrangler kv:namespace create "s3proxy_cache"
 Replace the id `your-id` with the id of the created namespace.  
 Then you can deploy the worker with the following command:
 
-```bash
 With the command:
 
 ```bash
@@ -80,17 +79,18 @@ npx wrangler deploy
 
 With the supplied `generate-hls-videos.sh` script, you can generate HLS videos from a video file. The script uses ffmpeg to generate the HLS videos.  
 with the help of Minio mc, the script uploads the generated videos to the S3 bucket.  
+Edit the script for defining your target resolutions.  
 Here is an example of how to use the script:
 
 ```bash
 . ./generate-hls-videos.sh
 generate_multi_resolution_hls "your-video.mp4"
-# it creates a directory with a uuid random name 
+# it creates a directory with a uuid random name if the "youyr-video" directory exists
 # now you can upload the videos to the S3 bucket
 # you can create an alias for mc with the following command
 # mc alias set s3e2bucket  https://e2.idrivee2-18.com access_key  secret_key
-mc cp -a UUID/* s3e2bucket/your-video.mp4/
-rm -rf UUID
+mc cp -a your-video/* s3e2bucket/your-video.mp4/
+rm -rf your-video
 ```
 
 ## License
