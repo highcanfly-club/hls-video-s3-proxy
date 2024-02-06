@@ -85,7 +85,7 @@ Here is an example of how to use the script:
 ```bash
 . ./generate-hls-videos.sh
 generate_multi_resolution_hls "your-video.mp4"
-# it creates a directory with a uuid random name if the "youyr-video" directory exists
+# it creates a directory with a uuid random name if the "your-video" directory exists
 # now you can upload the videos to the S3 bucket
 # you can create an alias for mc with the following command
 # mc alias set s3e2bucket  https://e2.idrivee2-18.com access_key  secret_key
