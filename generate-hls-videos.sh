@@ -45,25 +45,87 @@
 # 	[resolution: string]: VideoDataResolution | string | string[];
 # }
 
+get_shell_name() {
+    shell_name=$(basename "$SHELL")
+    echo "$shell_name"
+}
+
+get_video_ratio() {
+    video_file=$1
+    ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$video_file"
+}
+
+get_video_nb_lines() {
+    video_file=$1
+    ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "$video_file"
+}
+
 generate_multi_resolution_hls() {
     HLS_SEGMENT_LENGTH=6
     # UUID="8DCDE049-2F20-4EEA-BE4C-CE6504BC2BAA"
 
     declare -A resolutions
-    # resolutions["240"]="136x240"
-    # resolutions["640"]="360x640"
-    # resolutions["960"]="540x960"
-    # resolutions["1280"]="720x1280"
-    # resolutions["1920"]="1080x1920"
-    # resolutions["3840"]="2160x3840"
-    resolutions["136"]="240x136"
-    resolutions["360"]="640x360"
-    resolutions["540"]="960x540"
-    resolutions["720"]="1280x720"
-    resolutions["1080"]="1920x1080"
-    resolutions["2160"]="3840x2160"
+    # résolutions 9:16
+    # resolutions[240]="136x240"
+    # resolutions[640]="360x640"
+    # resolutions[960]="540x960"
+    # resolutions[1280]="720x1280"
+    # resolutions[1920]="1080x1920"
+    # resolutions[3840]="2160x3840"
+    # résolutions 16:9
+    resolutions[136]="240x136"
+    resolutions[360]="640x360"
+    resolutions[540]="960x540"
+    resolutions[720]="1280x720"
+    resolutions[1080]="1920x1080"
+    resolutions[2160]="3840x2160"
+
     input=$1
-    base_name=$(basename "$input" .mp4)
+    base_name="$(basename "$input" .mp4)"
+
+    # Parcourez les clés triées
+    echo ${resolutions["240"]}
+    SHELLTYPE=$(get_shell_name)
+    echo "Shell type: $SHELLTYPE"
+
+    # Extraire les clés
+    if [[ $SHELLTYPE == "zsh" ]]; then
+    # Pour Zsh
+    keys=("${(@k)resolutions}")
+    else
+    # Pour Bash
+    keys=("${!resolutions[@]}")
+    fi
+
+    # Trier les clés
+    unset sorted_keys
+    IFS=$'\n' sorted_keys=($(printf "%s\n" "${keys[@]}" | sort -n))
+    unset IFS
+
+    # Créer un tableau associatif pour les résolutions inférieures ou égales à la résolution de la vidéo
+    declare -A sub_resolutions
+    NBLINES=$(get_video_nb_lines "$input")
+    echo "Nombre de lignes de la vidéo: $NBLINES"
+    for key in "${sorted_keys[@]}"; do
+        if [[ $key -le $NBLINES ]]; then
+            sub_resolutions[$key]="${resolutions[$key]}"
+        fi
+    done
+        # Extraire les clés
+    if [[ $SHELLTYPE == "zsh" ]]; then
+        # Pour Zsh
+        keys=("${(@k)sub_resolutions}")
+    else
+        # Pour Bash
+        keys=("${!sub_resolutions[@]}")
+    fi
+    # Trier les clés du nouveau tableau associatif
+    IFS=$'\n' sorted_keys=($(printf "%s\n" "${keys[@]}" | sort -n))
+    unset IFS
+    for key in "${sorted_keys[@]}"; do
+        echo "Key: $key Value: ${resolutions[$key]}"
+    done
+    read
 
     if [[ -z $UUID ]]; then
 
@@ -74,7 +136,8 @@ generate_multi_resolution_hls() {
         fi
         mkdir -p ./$UUID
         # Encode video in multiple resolutions
-        for resolution_hxv in "${resolutions[@]}"; do
+        for key in "${sorted_keys[@]}"; do
+            resolution_hxv=${resolutions[$key]}
             resolutionh=$(echo $resolution_hxv | sed 's/x.*//')
             resolutionv=$(echo $resolution_hxv | sed 's/.*x//')
             echo "Resolution: $resolutionh x $resolutionv"
@@ -87,6 +150,7 @@ generate_multi_resolution_hls() {
                 "${UUID}/${base_name}_${resolutionh}p.m3u8"
             mv "${UUID}/init.mp4" "${UUID}/${base_name}_${resolutionh}p.mp4"
             sed -i '' -e 's/init.mp4/'"${base_name}_${resolutionh}p.mp4"'/g' "${UUID}/${base_name}_${resolutionh}p.m3u8"
+            echo "************"
             # echo "please hit enter to continue"
             # read
         done
@@ -94,7 +158,8 @@ generate_multi_resolution_hls() {
         # Create master playlist file
         echo "#EXTM3U" >"${UUID}/${base_name}_master.m3u8"
 
-        for resolution_hxv in "${resolutions[@]}"; do
+        for key in "${sorted_keys[@]}"; do
+            resolution_hxv=${resolutions[$key]}
             resolutionh=$(echo $resolution_hxv | sed 's/x.*//')
             resolutionv=$(echo $resolution_hxv | sed 's/.*x//')
             echo "#EXT-X-STREAM-INF:BANDWIDTH=$((500000 * $resolutionh / 240)),RESOLUTION=${resolutionh}p" >>"${UUID}/${base_name}_master.m3u8"
@@ -105,7 +170,8 @@ generate_multi_resolution_hls() {
     # Generate JSON file with filenames
     multiresolution_json=()
     generated_resolutions=()
-    for resolution_hxv in "${resolutions[@]}"; do
+    for key in "${sorted_keys[@]}"; do
+        resolution_hxv=${resolutions[$key]}
         filenames=()
         resolutionh=$(echo $resolution_hxv | sed 's/x.*//')
         generated_resolutions+=(\"${resolutionh}p\")
