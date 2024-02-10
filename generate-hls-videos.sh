@@ -1,4 +1,4 @@
-#!/bin/bash
+# !/bin/bash
 #
 # MIT License
 #
@@ -55,46 +55,89 @@ get_video_ratio() {
     ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$video_file"
 }
 
+get_video_ratio_numeric() {
+    video_file=$1
+    ratio_text=$(get_video_ratio "$video_file")
+    resolutionh=$(echo $ratio_text | sed 's/x.*//')
+    resolutionv=$(echo $ratio_text | sed 's/.*x//')
+    ratio=$(echo "scale=3; $resolutionh / $resolutionv" | bc)
+    echo $ratio
+}
+
 get_video_nb_lines() {
     video_file=$1
     ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "$video_file"
 }
 
 generate_multi_resolution_hls() {
+    # nombre de secondes par segment
     HLS_SEGMENT_LENGTH=6
-    # UUID="8DCDE049-2F20-4EEA-BE4C-CE6504BC2BAA"
-
-    declare -A resolutions
-    # résolutions 9:16
-    # resolutions[240]="136x240"
-    # resolutions[640]="360x640"
-    # resolutions[960]="540x960"
-    # resolutions[1280]="720x1280"
-    # resolutions[1920]="1080x1920"
-    # resolutions[3840]="2160x3840"
-    # résolutions 16:9
-    resolutions[136]="240x136"
-    resolutions[360]="640x360"
-    resolutions[540]="960x540"
-    resolutions[720]="1280x720"
-    resolutions[1080]="1920x1080"
-    resolutions[2160]="3840x2160"
-
-    input=$1
-    base_name="$(basename "$input" .mp4)"
-
-    # Parcourez les clés triées
-    echo ${resolutions["240"]}
     SHELLTYPE=$(get_shell_name)
+    input=$1
+    if [[ -z $input ]]; then
+        echo "Please provide a video file"
+        return
+    fi
+    NBLINES=$(get_video_nb_lines "$input")
+    RATIO=$(get_video_ratio_numeric "$input")
+    base_name="$(basename "$input" .mp4)"
     echo "Shell type: $SHELLTYPE"
+    echo "Number of lines in source video: $NBLINES"
+    echo "Video ratio: $RATIO"
+
+    # UUID="8DCDE049-2F20-4EEA-BE4C-CE6504BC2BAA"
+    # Select the closest resolution based on the given ratio
+    declare -A resolutions
+    if (( $(echo "$RATIO < 1" | bc -l) )); then
+        # résolutions 9:16
+        echo "Using 9:16 resolutions"
+        resolutions[144]="80x144"
+        resolutions[240]="136x240"
+        resolutions[640]="360x640"
+        resolutions[960]="540x960"
+        resolutions[1280]="720x1280"
+        resolutions[1920]="1080x1920"
+        resolutions[3840]="2160x3840"
+    elif (( $(echo "$RATIO > 1.5 " | bc -l) )); then
+        # résolutions 16:9
+        echo "Using 16:9 resolutions"
+        resolutions[136]="240x136"
+        resolutions[240]="426x240"
+        resolutions[480]="852x480"
+        resolutions[720]="1280x720"
+        resolutions[1080]="1920x1080"
+        resolutions[1440]="2560x1440"
+        resolutions[2160]="3840x2160"
+    elif (( $(echo "1.1 < $RATIO <= 1.5 " | bc -l) )); then
+        # résolutions 4:3
+        echo "Using 4:3 resolutions"
+        resolutions[136]="204x136"
+        resolutions[240]="320x240"
+        resolutions[480]="640x480"
+        resolutions[720]="960x720"
+        resolutions[1080]="1440x1080"
+        resolutions[1440]="1920x1440"
+        resolutions[2880]="3840x2880"
+    else
+        # résolutions 1:1
+        echo "Using square resolutions"
+        resolutions[136]="136x136"
+        resolutions[240]="240x240"
+        resolutions[480]="480x480"
+        resolutions[720]="720x720"
+        resolutions[1080]="1080x1080"
+        resolutions[1440]="1440x1440"
+        resolutions[2880]="2880x2880"
+        resolutions[3840]="3840x3840"
+    fi
 
     # Extraire les clés
     if [[ $SHELLTYPE == "zsh" ]]; then
-    # Pour Zsh
-    keys=("${(@k)resolutions}")
+        # Pour Zsh
+        keys=("${(@k)resolutions}")
     else
-    # Pour Bash
-    keys=("${!resolutions[@]}")
+        # Pour Bash
+        keys=("${!resolutions[@]}")
     fi
 
     # Trier les clés
@@ -104,8 +147,6 @@ generate_multi_resolution_hls() {
 
     # Créer un tableau associatif pour les résolutions inférieures ou égales à la résolution de la vidéo
     declare -A sub_resolutions
-    NBLINES=$(get_video_nb_lines "$input")
-    echo "Nombre de lignes de la vidéo: $NBLINES"
     for key in "${sorted_keys[@]}"; do
         if [[ $key -le $NBLINES ]]; then
             sub_resolutions[$key]="${resolutions[$key]}"
@@ -125,7 +166,6 @@ generate_multi_resolution_hls() {
     for key in "${sorted_keys[@]}"; do
         echo "Key: $key Value: ${resolutions[$key]}"
     done
-    read
 
     if [[ -z $UUID ]]; then
 
@@ -144,10 +184,10 @@ generate_multi_resolution_hls() {
             ratio=$(echo "scale=3; $resolutionv / $resolutionh" | bc)
             echo "Ratio: $ratio"
             echo "Encoding video in $resolution_hxv resolution"
-            ffmpeg -i "$input" \
-                -c:v libx264 -profile:v baseline -level 3.0 -s $resolution_hxv \
-                -start_number 0 -hls_time $HLS_SEGMENT_LENGTH -hls_list_size 0 -hls_segment_type fmp4 -f hls \
-                "${UUID}/${base_name}_${resolutionh}p.m3u8"
+            # ffmpeg -i "$input" \
+            #     -c:v libx264 -profile:v baseline -level 3.0 -s $resolution_hxv \
+            #     -start_number 0 -hls_time $HLS_SEGMENT_LENGTH -hls_list_size 0 -hls_segment_type fmp4 -f hls \
+            #     "${UUID}/${base_name}_${resolutionh}p.m3u8"
             mv "${UUID}/init.mp4" "${UUID}/${base_name}_${resolutionh}p.mp4"
             sed -i '' -e 's/init.mp4/'"${base_name}_${resolutionh}p.mp4"'/g' "${UUID}/${base_name}_${resolutionh}p.m3u8"
             echo "************"
