@@ -91,12 +91,12 @@ generate_multi_resolution_hls() {
     if (( $(echo "$RATIO < 1" | bc -l) )); then
         # résolutions 9:16
         echo "Using 9:16 resolutions"
-        resolutions[144]="80x144"
         resolutions[240]="136x240"
         resolutions[640]="360x640"
         resolutions[960]="540x960"
         resolutions[1280]="720x1280"
         resolutions[1920]="1080x1920"
+        resolutions[2560]="1440x2560"
         resolutions[3840]="2160x3840"
     elif (( $(echo "$RATIO > 1.5 " | bc -l) )); then
         # résolutions 16:9
