@@ -20,22 +20,39 @@
  * SOFTWARE.
  */
 
-import s3Config from "./s3-config.json";
+import _s3Config from "./s3-config.json";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { KVNamespace } from "@cloudflare/workers-types";
-import * as CryptoJS from "crypto-js";
+import CryptoJS from "crypto-js";
 
 type KVMetadata = {
 	expiration: number;
 };
 
-type VideoObject = {
-    name: string;
-    expiration: number;
-    metadata: KVMetadata;
+export type VideoObject = {
+	name: string;
+	expiration: number;
+	metadata: KVMetadata;
 };
 
+export type S3Config = {
+	region: string;
+	credentials: {
+		accessKeyId: string;
+		secretAccessKey: string;
+	};
+	endpoint: string;
+	expiration: string;
+	videoBucket: string;
+};
+
+export type S3ProxyClient = {
+	s3Client: S3Client;
+	s3Config: S3Config;
+};
+
+const s3Config = _s3Config as S3Config[];
 const SEGMENTS_REGEX = /([\w\-_\.]+\.(m4s|mp4|mp3|aac|webm))/g; // Matches segment files
 const M3U8_REGEX = /(.*[\w\-_\.]+\.m3u8)/g; // Matches M3U8 files (optionally in a URL)
 const URL_REGEX = /^https|http?:\/\//i; // Matches URLs
@@ -43,16 +60,20 @@ const HSL_MIME_TYPE = "application/x-mpegURL"; // MIME type for HLS playlists
 const EXPIRATION_DEFAULT = 3600; // Default expiration time for signed URLs in seconds
 const EXPIRATION_MARGIN = 100; // Margin in seconds for expiration time the cache will expire before the signed URL
 
-// Create an S3 client for Amazon S3 or compatible services
+// Create a S3 client for each Amazon S3 or compatible services
 // for IDrive® e2 the region is not pertinent you must use  a fake region
-const s3Client = new S3Client({
-	region: s3Config.region,
-	credentials: {
-		accessKeyId: s3Config.credentials.accessKeyId,
-		secretAccessKey: s3Config.credentials.secretAccessKey,
-	},
-	endpoint: s3Config.endpoint,
+const s3ProxyClients = s3Config.map((conf) => {
+	const awsS3Client = new S3Client({
+		region: conf.region,
+		credentials: {
+			accessKeyId: conf.credentials.accessKeyId,
+			secretAccessKey: conf.credentials.secretAccessKey,
+		},
+		endpoint: conf.endpoint,
+	});
+	return { s3Client: awsS3Client, s3Config: conf } as S3ProxyClient;
 });
+
 
 /**
  * Generates a signed URL for an object in an S3 bucket.
@@ -65,6 +86,7 @@ const s3Client = new S3Client({
 async function getSignedUrlForObject(
 	bucket: string,
 	key: string,
+	s3ProxyConfig: S3ProxyClient,
 ): Promise<string> {
 	if (!bucket || !key) {
 		throw new Error("No bucket or key provided");
@@ -72,10 +94,10 @@ async function getSignedUrlForObject(
 
 	try {
 		const command = new GetObjectCommand({ Bucket: bucket, Key: key });
-		const expiration = parseInt(s3Config.expiration)
-			? parseInt(s3Config.expiration)
+		const expiration = parseInt(s3ProxyConfig.s3Config.expiration)
+			? parseInt(s3ProxyConfig.s3Config.expiration)
 			: 3600;
-		const signedUrl = await getSignedUrl(s3Client, command, {
+		const signedUrl = await getSignedUrl(s3ProxyConfig.s3Client, command, {
 			expiresIn: expiration,
 		});
 		return signedUrl;
@@ -96,6 +118,7 @@ async function replaceFilesInM3U8(
 	basePath: string,
 	m3u8: string,
 	bucket: string,
+	s3ProxyConfig: S3ProxyClient,
 ): Promise<string> {
 	if (!m3u8 || !bucket) {
 		throw new Error("No M3U8 file or bucket provided");
@@ -117,7 +140,7 @@ async function replaceFilesInM3U8(
 	lines.forEach((line, index) => {
 		const match = line.match(SEGMENTS_REGEX);
 		if (match) {
-			const promise = getSignedUrlForObject(bucket, `${pathInBucket}${match[0]}`);
+			const promise = getSignedUrlForObject(bucket, `${pathInBucket}${match[0]}`, s3ProxyConfig);
 			promises.push({ signedUrl: promise, line: index });
 		}
 	});
@@ -190,14 +213,14 @@ function replaceM3u8Urls(request: Request, m3u8: string): string {
  * @returns The signed M3U8 file
  * @throws {Error} If the requested M3U8 file is not found
  */
-async function getSignedM3u8(request: Request, bucket: string, key: string) {
+async function getSignedM3u8(request: Request, bucket: string, key: string, s3ProxyClient: S3ProxyClient) {
 	if (!bucket || !key) {
 		throw new Error("Invalid bucket or key");
 	}
 
 	try {
 		// Get the M3U8 file from the S3 bucket
-		const clearM3uRequest = await s3Client.send(
+		const clearM3uRequest = await s3ProxyClient.s3Client.send(
 			new GetObjectCommand({ Bucket: bucket, Key: key }),
 		);
 		if (!clearM3uRequest.Body) {
@@ -210,6 +233,7 @@ async function getSignedM3u8(request: Request, bucket: string, key: string) {
 			getBasePath(request),
 			clearM3u8,
 			bucket,
+			s3ProxyClient
 		);
 		const finalM3u8 = replaceM3u8Urls(request, signedM3u8);
 
@@ -227,6 +251,7 @@ export interface Env {
 
 /**
  * Checks if the provided clear code is valid.
+ * The code is valid if it matches the temporary code generated based on the number of days since the epoch and the  one of the secret keys.
  *
  * @param clearCode - The clear code to check
  * @returns True if the clear code is valid, false otherwise
@@ -234,14 +259,19 @@ export interface Env {
 function isClearCodeValid(clearCode: string | null): boolean {
 	// Generate a temporary code based on the number of days since the epoch and the secret key
 	const daysSinceEpoch = Math.floor(Date.now() / (1000 * 60 * 60 * 24));
-	const secret = s3Config.credentials.secretAccessKey;
-	const tempCode = CryptoJS.HmacSHA256(
-		String(daysSinceEpoch),
-		secret,
-	).toString();
-
-	// Compare the temporary code to the provided clear code
-	return clearCode === tempCode;
+	let returned = false;
+	s3ProxyClients.forEach((s3ProxyClient) => {
+		const secret = s3ProxyClient.s3Config.credentials.secretAccessKey;
+		const tempCode = CryptoJS.HmacSHA256(
+			String(daysSinceEpoch),
+			secret,
+		).toString();
+		// Compare the temporary code to the provided clear code
+		if (clearCode === tempCode) {
+			returned = true;
+		}
+	});
+	return returned;
 }
 
 function removeLeadingSlash(path: string): string {
@@ -257,8 +287,8 @@ function calculateExpirationTtl(expiration: string | undefined): number {
 }
 
 async function clearCacheForKey(env: Env, bucket: string, key: string): Promise<void> {
-	console.log(`Clearing cache for ${bucket}/${key}`);
-	await env.s3proxy_cache.delete(`${bucket}/${key}`);
+	console.log(`Clearing cache for ${key}`);
+	await env.s3proxy_cache.delete(`${key}`);
 }
 
 function extractBucketAndKey(requestedM3u: string, defaultBucket: string): { bucket: string, key: string } {
@@ -286,26 +316,34 @@ function addExpirationDateCommentInM3u8(m3u8: string, expirationDate: Date): str
 
 }
 
-async function handleM3U8Request(request: Request, env: Env): Promise<Response> {
+function getRandomRobin(max: number): number {
+	if (max <= 0) {
+		return 0;
+	}
+	return Math.floor(Math.random() * Math.floor(max));
+}
+
+async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3ProxyClient): Promise<Response> {
 	const url = new URL(request.url);
 	const path = new URL(request.url).pathname;
 	const requestedM3u = removeLeadingSlash(path);
-	const expirationTtl = calculateExpirationTtl(s3Config.expiration);
+	const expirationTtl = calculateExpirationTtl(s3ProxyClient.s3Config.expiration);
 
 	let signedM3u8 = "" as string | null; // Default to empty string
 
-	const { bucket, key } = extractBucketAndKey(requestedM3u, s3Config.videoBucket);
+	const { bucket, key } = extractBucketAndKey(requestedM3u, s3ProxyClient.s3Config.videoBucket);
 
 	// Input validation
 	validateKey(key);
-
+	// Create a cache key from the bucket and key
+	const cacheKey = `${s3ProxyClient.s3Config.endpoint}/${bucket}/${key}`;
 	const params = url.searchParams;
 	const clearCache = params.get("clear-cache");
 	if (clearCache) {
 		// Clear the cache if the correct secret is provided
 		if (isClearCodeValid(clearCache)) {
 			// force clearing this key from the cache
-			await clearCacheForKey(env, bucket, key);
+			await clearCacheForKey(env, bucket, cacheKey);
 		}
 	}
 
@@ -317,8 +355,6 @@ async function handleM3U8Request(request: Request, env: Env): Promise<Response> 
 
 	// Get signed M3U8
 	try {
-		// Create a cache key from the bucket and key
-		const cacheKey = `${bucket}/${key}`;
 		let expirationDate = new Date(Date.now() + expirationTtl * 1000);
 		// Try to get the signed M3U8 from the cache
 		const { value, metadata } = await env.s3proxy_cache.getWithMetadata(cacheKey) as { value: string, metadata: KVMetadata };
@@ -333,7 +369,7 @@ async function handleM3U8Request(request: Request, env: Env): Promise<Response> 
 		if (!signedM3u8) {
 			console.log("Cache miss");
 			signedM3u8 = requestedM3u
-				? await getSignedM3u8(request, bucket, key)
+				? await getSignedM3u8(request, bucket, key, s3ProxyClient)
 				: "";
 			// Add expiration date comment in M3U8
 			signedM3u8 = addExpirationDateCommentInM3u8(signedM3u8, expirationDate);
@@ -373,23 +409,28 @@ async function handleM3U8Request(request: Request, env: Env): Promise<Response> 
 }
 
 async function deleteAllKeys(kv: KVNamespace) {
-    let keys = [] as VideoObject[];
-    let cursor = "";
+	let keys = [] as VideoObject[];
+	let cursor = "";
 
-    // Récupérer toutes les clés
-    do {
-        const response = await kv.list({ cursor: cursor });
+	// Récupérer toutes les clés
+	do {
+		const response = await kv.list({ cursor: cursor }) as {
+			list_complete: false;
+			keys: VideoObject[];
+			cursor: string;
+			cacheStatus: string | null;
+		};
 		const _keys = response.keys as VideoObject[]
-        keys = _keys.concat();
+		keys = _keys.concat();
 		console.log(`Got ${response.keys} keys`);
-        cursor = response.cursor;
-    } while (cursor);
+		cursor = response.cursor;
+	} while (cursor);
 
 	console.log(`Deleting ${keys.length} keys`);
-    // Supprimer toutes les clés
-    for (const key of keys) {
-        await kv.delete(key.name);
-    }
+	// Supprimer toutes les clés
+	for (const key of keys) {
+		await kv.delete(key.name);
+	}
 }
 
 async function handleFlushCacheRequest(request: Request, env: Env): Promise<Response> {
@@ -409,23 +450,27 @@ async function handleFlushCacheRequest(request: Request, env: Env): Promise<Resp
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
+		const randomRobin = getRandomRobin(s3ProxyClients.length);
+		const s3ProxyClient = s3ProxyClients[randomRobin];
+		console.log(`Using S3 client ${randomRobin}`);
 		if (request.method === "GET") {
 			const path = new URL(request.url).pathname;
 			if (path.endsWith(".m3u8")) {
-				return await handleM3U8Request(request, env);
-			} else if (path === "/health") {
-				return new Response("OK", { status: 200 });
-			} else if (path === "/") {
-				return new Response("Welcome to the S3 Proxy", { status: 200 });
-			} else if (path === "/robots.txt") {
-				return new Response("User-agent: *\nDisallow: /", { status: 200 });
-			} else if (path === "/favicon.ico") {
-				return new Response(null, { status: 204 });
-			} else if (path === "/flush-cache") {
-				return handleFlushCacheRequest(request, env);
+				return await handleM3U8Request(request, env, s3ProxyClient);
 			}
-			else {
-				return new Response("Not found", { status: 404 });
+			switch (path) {
+				case "/":
+					return new Response("Welcome to the S3 Proxy", { status: 200 });
+				case "/favicon.ico":
+					return new Response(null, { status: 204 });
+				case "/flush-cache":
+					return handleFlushCacheRequest(request, env);
+				case "/health":
+					return new Response("OK", { status: 200 });
+				case "/robots.txt":
+					return new Response("User-agent: *\nDisallow: /", { status: 200 });
+				default:
+					return new Response("Not found", { status: 404 });
 			}
 
 		} else if (request.method === "OPTIONS") {

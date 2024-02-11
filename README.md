@@ -39,7 +39,8 @@ The S3 client configuration is done via the `src/s3-config.json` file. You need 
 for example for idrivee2 S3 bucket with Paris region, the configuration is as follows (note us-east-1 is not the correct region but idrivee2 uses the region in the endpoint and AWS SDK requires it so any value is accepted for the region field):
 
 ```json
-{
+[
+    {
     "region": "us-east-1",
     "credentials": {
         "accessKeyId": "DYzO2ETMyoSvut729YKP",
@@ -48,16 +49,27 @@ for example for idrivee2 S3 bucket with Paris region, the configuration is as fo
     "endpoint": "https://l2e5.par.idrivee2-18.com",
     "expiration": "604800",
     "videoBucket": "my-videos"
-}
+    }
+]
 ```
 
-Replace "your-region", "your-access-key-id", "your-secret-access-key", and "your-s3-endpoint" with your S3 credentials and configuration.
+Replace "your-region", "your-access-key-id", "your-secret-access-key", and "your-s3-endpoint" with your S3 credentials and configuration.  
+As the array of configurations is supported, you can add multiple configurations for different S3 buckets.  
+Obviously all the buckets should contain the same files with the same names and the same directory structure.  
+It permits to randomly select a S3 account for each request.
 
 ## Cache
 
 The Cloudflare worker caches the M3U8 files for 1 hour or for the value of s3Config.expiration minus 100 seconds.  
 The video segments are not cached.
+
+### Clearing the Cache per key
+
 The cache can be cleared by adding a `?clear-cache` query parameter to the request with the value of a hash generated with the day and the `s3Config.credentials.secretAccessKey` . See the `isClearCodeValid` function in the worker code and the `get-secret-code.sh` script for more details.
+
+### Clearing the Cache for all keys
+
+The cache can be cleared for all keys by hitting a `/flush-cache?key=[same key as previous]` request.
 
 ## Usage
 
