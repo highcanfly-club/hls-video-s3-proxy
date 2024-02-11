@@ -55,6 +55,13 @@ get_video_ratio() {
     ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "$video_file"
 }
 
+get_video_frame_rate() {
+    video_file=$1
+    rate_base=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=s=x:p=0 "$video_file" 2>/dev/null)
+    rate=$(echo -n "scale=3; $rate_base" | bc)
+    echo $rate | tail -n 1
+}
+
 get_video_ratio_numeric() {
     video_file=$1
     ratio_text=$(get_video_ratio "$video_file")
@@ -80,6 +87,7 @@ generate_multi_resolution_hls() {
     fi
     NBLINES=$(get_video_nb_lines "$input")
     RATIO=$(get_video_ratio_numeric "$input")
+    FRAME_RATE=$(get_video_frame_rate "$input")
     base_name="$(basename "$input" .mp4)"
     echo "Shell type: $SHELLTYPE"
     echo "Number of lines in source video: $NBLINES"
@@ -184,10 +192,12 @@ generate_multi_resolution_hls() {
             ratio=$(echo "scale=3; $resolutionv / $resolutionh" | bc)
             echo "Ratio: $ratio"
             echo "Encoding video in $resolution_hxv resolution"
-            # ffmpeg -i "$input" \
-            #     -c:v libx264 -profile:v baseline -level 3.0 -s $resolution_hxv \
-            #     -start_number 0 -hls_time $HLS_SEGMENT_LENGTH -hls_list_size 0 -hls_segment_type fmp4 -f hls \
-            #     "${UUID}/${base_name}_${resolutionh}p.m3u8"
+            # encode video according to the rfc6381 CODECS="mp4a.40.2,avc1.100.40"
+            ffmpeg -i "$input" \
+                -c:v libx264 -profile:v high -level 4.0 -s $resolution_hxv \
+                -c:a aac -b:a 128k \
+                -start_number 0 -hls_time $HLS_SEGMENT_LENGTH -hls_list_size 0 -hls_segment_type fmp4 -f hls \
+                "${UUID}/${base_name}_${resolutionh}p.m3u8"
             mv "${UUID}/init.mp4" "${UUID}/${base_name}_${resolutionh}p.mp4"
             sed -i '' -e 's/init.mp4/'"${base_name}_${resolutionh}p.mp4"'/g' "${UUID}/${base_name}_${resolutionh}p.m3u8"
             echo "************"
@@ -197,12 +207,14 @@ generate_multi_resolution_hls() {
 
         # Create master playlist file
         echo "#EXTM3U" >"${UUID}/${base_name}_master.m3u8"
+        echo "#EXT-X-VERSION:7" >>"${UUID}/${base_name}_master.m3u8"
+        echo "## Created by Ronan Le Meillat" >>"${UUID}/${base_name}_master.m3u8"
 
         for key in "${sorted_keys[@]}"; do
             resolution_hxv=${resolutions[$key]}
             resolutionh=$(echo $resolution_hxv | sed 's/x.*//')
             resolutionv=$(echo $resolution_hxv | sed 's/.*x//')
-            echo "#EXT-X-STREAM-INF:BANDWIDTH=$((500000 * $resolutionh / 240)),RESOLUTION=${resolutionh}p" >>"${UUID}/${base_name}_master.m3u8"
+            echo "#EXT-X-STREAM-INF:BANDWIDTH=$((500000 * $resolutionh / 240)),CODECS=\"mp4a.40.2,avc1.100.40\",RESOLUTION=${resolutionh}x${resolutionv},FRAME-RATE=${FRAME_RATE}" >>"${UUID}/${base_name}_master.m3u8"
             echo "${base_name}_${resolutionh}p.m3u8" >>"${UUID}/${base_name}_master.m3u8"
         done
     fi
