@@ -30,12 +30,14 @@ type KVMetadata = {
 	expiration: number;
 };
 
+// The video object
 export type VideoObject = {
 	name: string;
 	expiration: number;
 	metadata: KVMetadata;
 };
 
+// The S3 configuration
 export type S3Config = {
 	region: string;
 	credentials: {
@@ -47,14 +49,16 @@ export type S3Config = {
 	videoBucket: string;
 };
 
+// The S3 proxy client
 export type S3ProxyClient = {
 	s3Client: S3Client;
 	s3Config: S3Config;
 };
 
 const s3Config = _s3Config as S3Config[];
-const SEGMENTS_REGEX = /([\w\-_\.]+\.(m4s|mp4|mp3|aac|webm))/g; // Matches segment files
-const M3U8_REGEX = /(.*[\w\-_\.]+\.m3u8)/g; // Matches M3U8 files (optionally in a URL)
+const POSTER_CACHE_TTL = 2592000; // 30 days
+const SEGMENTS_REGEX = /([\w\-_.]+\.(m4s|mp4|mp3|aac|webm))/g; // Matches segment files
+const M3U8_REGEX = /(.*[\w\-_.]+\.m3u8)/g; // Matches M3U8 files (optionally in a URL)
 const URL_REGEX = /^https|http?:\/\//i; // Matches URLs
 const HSL_MIME_TYPE = "application/x-mpegURL"; // MIME type for HLS playlists
 const EXPIRATION_DEFAULT = 3600; // Default expiration time for signed URLs in seconds
@@ -80,6 +84,7 @@ const s3ProxyClients = s3Config.map((conf) => {
  *
  * @param bucket - The name of the S3 bucket where the object is stored.
  * @param key - The key of the object for which to generate a signed URL.
+ * @param s3ProxyConfig - The S3 proxy client
  * @returns A signed URL for the object.
  * @throws {Error} If the bucket name or the key is not provided.
  */
@@ -106,11 +111,13 @@ async function getSignedUrlForObject(
 		throw new Error("Failed to get signed URL for object");
 	}
 }
+
 /**
  * Replaces the URLs of the segments in an M3U8 file with signed URLs.
  *
  * @param m3u8 - The original M3U8 file as a string.
  * @param bucket - The name of the S3 bucket where the M3U8 file is stored.
+ * @param s3ProxyConfig - The S3 proxy client
  * @returns A new M3U8 file as a string with the URLs of the segments replaced by signed URLs.
  * @throws {Error} If the M3U8 file or the bucket name is not provided.
  */
@@ -147,16 +154,16 @@ async function replaceFilesInM3U8(
 
 	try {
 		let newM3u8 = "";
-		await Promise.all(promises.map((p) => p.signedUrl)).then((urls) => {
-			urls.forEach((url, index) => {
-				const newLine = lines[promises[index].line].replace(
-					SEGMENTS_REGEX,
-					url,
-				);
-				lines[promises[index].line] = newLine;
-			});
-			newM3u8 = lines.join("\n"); // Join the lines back into a single string
+		const urls = await Promise.all(promises.map((p) => p.signedUrl));
+		urls.forEach((url, index) => {
+			const newLine = lines[promises[index].line].replace(
+				SEGMENTS_REGEX,
+				url,
+			);
+			lines[promises[index].line] = newLine;
 		});
+		newM3u8 = lines.join("\n"); // Join the lines back into a single string
+		
 		return newM3u8;
 	} catch (error) {
 		console.error(error);
@@ -164,6 +171,11 @@ async function replaceFilesInM3U8(
 	}
 }
 
+/**
+ * Retrieves the base path from a request.
+ * @param request - The request object
+ * @returns The base path of the request URL.
+ */
 function getBasePath(request: Request): string {
 	const urlObj = new URL(request.url);
 	const path = urlObj.pathname.split("/").slice(0, -1).join("/").substring(1);
@@ -209,7 +221,8 @@ function replaceM3u8Urls(request: Request, m3u8: string): string {
  *
  * @param request - The request object
  * @param bucket - The S3 bucket where the M3U8 file is stored
- * @param key - The requested M3U8 file
+ * @param key - The requested M3U8 files
+ * @param s3ProxyClient - The S3 proxy client
  * @returns The signed M3U8 file
  * @throws {Error} If the requested M3U8 file is not found
  */
@@ -245,6 +258,9 @@ async function getSignedM3u8(request: Request, bucket: string, key: string, s3Pr
 	}
 }
 
+/**
+ * The environment object
+ */
 export interface Env {
 	s3proxy_cache: KVNamespace;
 }
@@ -274,10 +290,21 @@ function isClearCodeValid(clearCode: string | null): boolean {
 	return returned;
 }
 
+/**
+ * Removes the leading slash from a path.
+ * @param path - The path
+ * @returns The path without the leading slash
+ */
 function removeLeadingSlash(path: string): string {
 	return path.substring(1);
 }
 
+/**
+ * Calculates the expiration time for a signed URL.
+ * If the expiration time is not provided, the default expiration time is used.
+ * @param expiration - The expiration time for the signed URL
+ * @returns The expiration time in seconds
+ */
 function calculateExpirationTtl(expiration: string | undefined): number {
 	const expirationMargin = EXPIRATION_MARGIN;
 	const defaultExpiration = EXPIRATION_DEFAULT;
@@ -286,11 +313,24 @@ function calculateExpirationTtl(expiration: string | undefined): number {
 		: defaultExpiration - expirationMargin;
 }
 
+/**
+ * Clears the cache for a specific key.
+ * @param env - The environment object
+ * @param bucket - The name of the S3 bucket
+ * @param key - The key of the S3 object
+ */
 async function clearCacheForKey(env: Env, bucket: string, key: string): Promise<void> {
 	console.log(`Clearing cache for ${key}`);
 	await env.s3proxy_cache.delete(`${key}`);
 }
 
+/**
+ * Extracts the bucket and key from the requested file.
+ * If the requested file contains a bucket, it is extracted from the path.
+ * @param requestedFile - The requested file
+ * @param defaultBucket - The default bucket
+ * @returns The bucket and key
+ */
 function extractBucketAndKey(requestedFile: string, defaultBucket: string): { bucket: string, key: string } {
 	let bucket = defaultBucket;
 	let key = requestedFile;
@@ -302,12 +342,24 @@ function extractBucketAndKey(requestedFile: string, defaultBucket: string): { bu
 	return { bucket, key };
 }
 
+/**
+ * Validates the requested M3U8 file.
+ * The key must not be empty and must end with ".m3u8".
+ * @param key - The requested M3U8 file
+ * @throws {Error} If the key is invalid
+ */
 function validateKey(key: string): void {
 	if (!key || !key.endsWith(".m3u8")) {
-		throw new Error("No M3U8 requested");
+		throw new Error("No M3U8 requested or invalid M3U8 file");
 	}
 }
 
+/**
+ * Adds a comment with the expiration date in the M3U8 file.
+ * @param m3u8 - The M3U8 file
+ * @param expirationDate - The expiration date
+ * @returns The M3U8 file with the expiration date comment
+ */
 function addExpirationDateCommentInM3u8(m3u8: string, expirationDate: Date): string {
 	const comment = `# Expires: ${expirationDate.toUTCString()}`;
 	const lines = m3u8.split("\n");
@@ -316,6 +368,11 @@ function addExpirationDateCommentInM3u8(m3u8: string, expirationDate: Date): str
 
 }
 
+/**
+ * Returns a random integer between 0 and max
+ * @param max - The maximum value
+ * @returns A random number
+ */
 function getRandomRobin(max: number): number {
 	if (max <= 0) {
 		return 0;
@@ -323,6 +380,15 @@ function getRandomRobin(max: number): number {
 	return Math.floor(Math.random() * Math.floor(max));
 }
 
+/**
+ * Handles a request for an M3U8 file.
+ * The request must contain the path to the M3U8 file.
+ * If the M3U8 file is found, it is signed and returned.
+ * @param request - The request object
+ * @param env - The environment object
+ * @param s3ProxyClient - The S3 proxy client
+ * @returns A response containing the signed M3U8 file
+ */
 async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3ProxyClient): Promise<Response> {
 	const url = new URL(request.url);
 	const path = new URL(request.url).pathname;
@@ -408,10 +474,21 @@ async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3Pr
 	}
 }
 
+/**
+ * Generates a cache key for an S3 object.
+ * @param s3ProxyClient - The S3 proxy client
+ * @param bucket - The name of the S3 bucket
+ * @param key - The key of the S3 object
+ * @returns A cache key for the S3 object
+ */
 function getCacheKey(s3ProxyClient: S3ProxyClient, bucket: string, key: string) {
 	return `${s3ProxyClient.s3Config.endpoint}/${bucket}/${key}`;
 }
 
+/**
+ * Deletes all keys from a KV namespace
+ * @param kv - The KV namespace
+ */
 async function deleteAllKeys(kv: KVNamespace) {
 	let keys = [] as VideoObject[];
 	let cursor = "";
@@ -437,6 +514,14 @@ async function deleteAllKeys(kv: KVNamespace) {
 	}
 }
 
+/**
+ * Handles a request to flush the cache.
+ * The request must contain a query parameter "key" with the clear code.
+ * If the clear code is valid, the entire cache is cleared.
+ * @param request - The request object
+ * @param env - The environment object
+ * @returns A response indicating whether the cache was cleared
+ */
 async function handleFlushCacheRequest(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
 	const params = url.searchParams;
@@ -452,8 +537,15 @@ async function handleFlushCacheRequest(request: Request, env: Env): Promise<Resp
 	return new Response("Invalid clear code", { status: 400 });
 }
 
-
-async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3ProxyClient):Promise<Response>{
+/**
+ * Retrieves a poster from an S3 bucket and returns it
+ * Cache the ETag for avoiding to download the poster each time
+ * @param request - The request object
+ * @param env - The environment object
+ * @param s3ProxyClient - The S3 proxy client
+ * @returns The poster
+ */
+async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3ProxyClient): Promise<Response> {
 
 	const path = new URL(request.url).pathname;
 	const requestePoster = removeLeadingSlash(path);
@@ -467,14 +559,14 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 			// If the ETag matches, return a 304 Not Modified response
 			if (ifNoneMatch === storedEtag) {
 				console.log("ETag matches");
-			return new Response(null, {
-				status: 304,
-				headers: {
-					"ETag": ifNoneMatch,
-					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
-					"Access-Control-Max-Age": "86400", // 24 hours
+				return new Response(null, {
+					status: 304,
+					headers: {
+						"ETag": ifNoneMatch,
+						"Access-Control-Allow-Origin": "*",
+						"Access-Control-Allow-Methods": "GET, OPTIONS",
+						"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+						"Access-Control-Max-Age": String(POSTER_CACHE_TTL), // 30 days
 					},
 				});
 			}
@@ -496,7 +588,7 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 		}
 		// Compute the ETag as the MD5 hash of the poster
 		const posterBuffer = await posterRequest.Body?.transformToByteArray();
-		
+
 		const etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(posterBuffer)).toString();
 
 		// Cache the ETag
@@ -509,8 +601,8 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 				"Access-Control-Allow-Origin": "*",
 				"Access-Control-Allow-Methods": "GET, OPTIONS",
 				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
-				"Access-Control-Max-Age": "2592000", // 30 days
-				"Cache-Control": "public, max-age=2592000, immutable", // 30 days
+				"Access-Control-Max-Age": String(POSTER_CACHE_TTL), // 30 days
+				"Cache-Control": `public, max-age=${POSTER_CACHE_TTL}, immutable`, // 30 days
 				"ETag": etag,
 			},
 		});
@@ -522,9 +614,11 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
+		// Get a random S3 proxy client
 		const randomRobin = getRandomRobin(s3ProxyClients.length);
 		const s3ProxyClient = s3ProxyClients[randomRobin];
 		console.log(`Using S3 client ${randomRobin}`);
+
 		if (request.method === "GET") {
 			const path = new URL(request.url).pathname;
 			if (path.endsWith(".m3u8")) {
