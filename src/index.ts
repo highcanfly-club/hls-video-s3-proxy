@@ -30,6 +30,12 @@ type KVMetadata = {
 	expiration: number;
 };
 
+type VideoObject = {
+    name: string;
+    expiration: number;
+    metadata: KVMetadata;
+};
+
 const SEGMENTS_REGEX = /([\w\-_\.]+\.(m4s|mp4|mp3|aac|webm))/g; // Matches segment files
 const M3U8_REGEX = /(.*[\w\-_\.]+\.m3u8)/g; // Matches M3U8 files (optionally in a URL)
 const URL_REGEX = /^https|http?:\/\//i; // Matches URLs
@@ -141,6 +147,7 @@ function getBasePath(request: Request): string {
 	console.log(`Base path: ${path}`);
 	return path;
 }
+
 /**
  *
  * Replace the URLs of the M3U8 file with localhost
@@ -238,37 +245,37 @@ function isClearCodeValid(clearCode: string | null): boolean {
 }
 
 function removeLeadingSlash(path: string): string {
-    return path.substring(1);
+	return path.substring(1);
 }
 
 function calculateExpirationTtl(expiration: string | undefined): number {
-    const expirationMargin = EXPIRATION_MARGIN; 
-    const defaultExpiration = EXPIRATION_DEFAULT; 
-    return expiration
-        ? parseInt(expiration) - expirationMargin
-        : defaultExpiration - expirationMargin;
+	const expirationMargin = EXPIRATION_MARGIN;
+	const defaultExpiration = EXPIRATION_DEFAULT;
+	return expiration
+		? parseInt(expiration) - expirationMargin
+		: defaultExpiration - expirationMargin;
 }
 
 async function clearCacheForKey(env: Env, bucket: string, key: string): Promise<void> {
-    console.log(`Clearing cache for ${bucket}/${key}`);
-    await env.s3proxy_cache.delete(`${bucket}/${key}`);
+	console.log(`Clearing cache for ${bucket}/${key}`);
+	await env.s3proxy_cache.delete(`${bucket}/${key}`);
 }
 
 function extractBucketAndKey(requestedM3u: string, defaultBucket: string): { bucket: string, key: string } {
-    let bucket = defaultBucket;
-    let key = requestedM3u;
+	let bucket = defaultBucket;
+	let key = requestedM3u;
 	if (requestedM3u.includes("/")) {
 		bucket = requestedM3u.split("/")[0]; // Get the bucket from the path
 		key = requestedM3u.substring(requestedM3u.indexOf("/") + 1); // Get the key from the path
 		console.log(`Bucket: ${bucket}, Key: ${key}`);
 	}
-    return { bucket, key };
+	return { bucket, key };
 }
 
 function validateKey(key: string): void {
-    if (!key || !key.endsWith(".m3u8")) {
-        throw new Error("No M3U8 requested");
-    }
+	if (!key || !key.endsWith(".m3u8")) {
+		throw new Error("No M3U8 requested");
+	}
 }
 
 function addExpirationDateCommentInM3u8(m3u8: string, expirationDate: Date): string {
@@ -278,92 +285,149 @@ function addExpirationDateCommentInM3u8(m3u8: string, expirationDate: Date): str
 	return lines.join("\n");
 
 }
+
+async function handleM3U8Request(request: Request, env: Env): Promise<Response> {
+	const url = new URL(request.url);
+	const path = new URL(request.url).pathname;
+	const requestedM3u = removeLeadingSlash(path);
+	const expirationTtl = calculateExpirationTtl(s3Config.expiration);
+
+	let signedM3u8 = "" as string | null; // Default to empty string
+
+	const { bucket, key } = extractBucketAndKey(requestedM3u, s3Config.videoBucket);
+
+	// Input validation
+	validateKey(key);
+
+	const params = url.searchParams;
+	const clearCache = params.get("clear-cache");
+	if (clearCache) {
+		// Clear the cache if the correct secret is provided
+		if (isClearCodeValid(clearCache)) {
+			// force clearing this key from the cache
+			await clearCacheForKey(env, bucket, key);
+		}
+	}
+
+	// Error handling
+	// if bucket has a 0 length it means that s3Config.videoBucket is not set or the requested path does not contain a bucket 
+	if (!s3Config || !bucket.length) {
+		throw new Error("Invalid S3 configuration");
+	}
+
+	// Get signed M3U8
+	try {
+		// Create a cache key from the bucket and key
+		const cacheKey = `${bucket}/${key}`;
+		let expirationDate = new Date(Date.now() + expirationTtl * 1000);
+		// Try to get the signed M3U8 from the cache
+		const { value, metadata } = await env.s3proxy_cache.getWithMetadata(cacheKey) as { value: string, metadata: KVMetadata };
+		signedM3u8 = value;
+		if (metadata) {
+			expirationDate = new Date(metadata.expiration * 1000);
+			console.log(`Expiration date: ${expirationDate.toISOString()}`);
+		}
+
+
+		// If the signed M3U8 is not in the cache, generate it, cache it, and return it
+		if (!signedM3u8) {
+			console.log("Cache miss");
+			signedM3u8 = requestedM3u
+				? await getSignedM3u8(request, bucket, key)
+				: "";
+			// Add expiration date comment in M3U8
+			signedM3u8 = addExpirationDateCommentInM3u8(signedM3u8, expirationDate);
+			// Cache the signed M3U8
+			await env.s3proxy_cache.put(cacheKey, signedM3u8, {
+				metadata: { expiration: Math.floor(Date.now() / 1000 + expirationTtl) },
+				expirationTtl: expirationTtl,
+			});
+		} else {
+			console.log("Cache hit");
+		}
+
+		// Check if getSignedM3u returned a non-empty string
+		if (!signedM3u8) {
+			throw new Error("Failed to get signed M3U8");
+		}
+
+		// Calculate the max age and expiration date for the response
+		const maxAge = Math.floor((expirationDate.getTime() - Date.now()) / 1000);
+
+		return new Response(signedM3u8, {
+			headers: {
+				"Content-Type": HSL_MIME_TYPE,
+				"Access-Control-Allow-Origin": "*",
+				"Access-Control-Allow-Methods": "GET, OPTIONS",
+				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+				"Access-Control-Max-Age": "86400", // 24 hours 
+				"Cache-Control": `public, max-age=${maxAge}`,
+				"Expires": expirationDate.toUTCString(),
+			},
+		});
+	} catch (error) {
+		// Handle asynchronous errors
+		console.error(error);
+		return new Response("An error occurred", { status: 500 });
+	}
+}
+
+async function deleteAllKeys(kv: KVNamespace) {
+    let keys = [] as VideoObject[];
+    let cursor = "";
+
+    // Récupérer toutes les clés
+    do {
+        const response = await kv.list({ cursor: cursor });
+		const _keys = response.keys as VideoObject[]
+        keys = _keys.concat();
+		console.log(`Got ${response.keys} keys`);
+        cursor = response.cursor;
+    } while (cursor);
+
+	console.log(`Deleting ${keys.length} keys`);
+    // Supprimer toutes les clés
+    for (const key of keys) {
+        await kv.delete(key.name);
+    }
+}
+
+async function handleFlushCacheRequest(request: Request, env: Env): Promise<Response> {
+	const url = new URL(request.url);
+	const params = url.searchParams;
+	const clearCache = params.get("key");
+	if (clearCache) {
+		// Clear the cache if the correct secret is provided
+		if (isClearCodeValid(clearCache)) {
+			// Clear the entire cache
+			await deleteAllKeys(env.s3proxy_cache);
+			return new Response("Cache cleared", { status: 200 });
+		}
+	}
+	return new Response("Invalid clear code", { status: 400 });
+}
+
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		if (request.method === "GET") {
-			const url = new URL(request.url);
 			const path = new URL(request.url).pathname;
-			const requestedM3u = removeLeadingSlash(path);
-            const expirationTtl = calculateExpirationTtl(s3Config.expiration);
-
-			let signedM3u8 = "" as string | null; // Default to empty string
-
-			const { bucket, key } = extractBucketAndKey(requestedM3u, s3Config.videoBucket);
-
-			// Input validation
-			validateKey(key);
-
-			const params = url.searchParams;
-			const clearCache = params.get("clear-cache");
-			if (clearCache) {
-				// Clear the cache if the correct secret is provided
-				if (isClearCodeValid(clearCache)) {
-					// force clearing this key from the cache
-					await clearCacheForKey(env, bucket, key);
-				}
+			if (path.endsWith(".m3u8")) {
+				return await handleM3U8Request(request, env);
+			} else if (path === "/health") {
+				return new Response("OK", { status: 200 });
+			} else if (path === "/") {
+				return new Response("Welcome to the S3 Proxy", { status: 200 });
+			} else if (path === "/robots.txt") {
+				return new Response("User-agent: *\nDisallow: /", { status: 200 });
+			} else if (path === "/favicon.ico") {
+				return new Response(null, { status: 204 });
+			} else if (path === "/flush-cache") {
+				return handleFlushCacheRequest(request, env);
+			}
+			else {
+				return new Response("Not found", { status: 404 });
 			}
 
-			// Error handling
-			// if bucket has a 0 length it means that s3Config.videoBucket is not set or the requested path does not contain a bucket 
-			if (!s3Config || !bucket.length) {
-				throw new Error("Invalid S3 configuration");
-			}
-
-			// Get signed M3U8
-			try {
-				// Create a cache key from the bucket and key
-				const cacheKey = `${bucket}/${key}`;
-				let expirationDate = new Date(Date.now() + expirationTtl * 1000);
-				// Try to get the signed M3U8 from the cache
-				const { value, metadata } = await env.s3proxy_cache.getWithMetadata(cacheKey) as { value: string, metadata: KVMetadata };
-				signedM3u8 = value;
-				if (metadata) {
-					expirationDate = new Date(metadata.expiration * 1000);
-					console.log(`Expiration date: ${expirationDate.toISOString()}`);
-				}
-
-
-				// If the signed M3U8 is not in the cache, generate it, cache it, and return it
-				if (!signedM3u8) {
-					console.log("Cache miss");
-					signedM3u8 = requestedM3u
-						? await getSignedM3u8(request, bucket, key)
-						: "";
-					// Add expiration date comment in M3U8
-					signedM3u8 = addExpirationDateCommentInM3u8(signedM3u8, expirationDate);
-					// Cache the signed M3U8
-					await env.s3proxy_cache.put(cacheKey, signedM3u8, {
-						metadata: { expiration: Math.floor(Date.now() / 1000 + expirationTtl) },
-						expirationTtl: expirationTtl,
-					});
-				} else {
-					console.log("Cache hit");
-				}
-
-				// Check if getSignedM3u returned a non-empty string
-				if (!signedM3u8) {
-					throw new Error("Failed to get signed M3U8");
-				}
-				
-				// Calculate the max age and expiration date for the response
-				const maxAge = Math.floor((expirationDate.getTime() - Date.now()) / 1000);
-
-				return new Response(signedM3u8, {
-					headers: {
-						"Content-Type": HSL_MIME_TYPE,
-						"Access-Control-Allow-Origin": "*",
-						"Access-Control-Allow-Methods": "GET, OPTIONS",
-						"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
-						"Access-Control-Max-Age": "86400", // 24 hours 
-						"Cache-Control": `public, max-age=${maxAge}`,
-						"Expires": expirationDate.toUTCString(),
-					},
-				});
-			} catch (error) {
-				// Handle asynchronous errors
-				console.error(error);
-				return new Response("An error occurred", { status: 500 });
-			}
 		} else if (request.method === "OPTIONS") {
 			return new Response(null, {
 				headers: {
