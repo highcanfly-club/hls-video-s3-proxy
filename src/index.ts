@@ -336,7 +336,7 @@ async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3Pr
 	// Input validation
 	validateKey(key);
 	// Create a cache key from the bucket and key
-	const cacheKey = `${s3ProxyClient.s3Config.endpoint}/${bucket}/${key}`;
+	const cacheKey = getCacheKey(s3ProxyClient, bucket, key);
 	const params = url.searchParams;
 	const clearCache = params.get("clear-cache");
 	if (clearCache) {
@@ -408,6 +408,10 @@ async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3Pr
 	}
 }
 
+function getCacheKey(s3ProxyClient: S3ProxyClient, bucket: string, key: string) {
+	return `${s3ProxyClient.s3Config.endpoint}/${bucket}/${key}`;
+}
+
 async function deleteAllKeys(kv: KVNamespace) {
 	let keys = [] as VideoObject[];
 	let cursor = "";
@@ -450,11 +454,19 @@ async function handleFlushCacheRequest(request: Request, env: Env): Promise<Resp
 
 
 async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3ProxyClient):Promise<Response>{
+
+	const path = new URL(request.url).pathname;
+	const requestePoster = removeLeadingSlash(path);
+	const { bucket, key } = extractBucketAndKey(requestePoster, s3ProxyClient.s3Config.videoBucket);
+	const cacheKey = getCacheKey(s3ProxyClient, bucket, key);
 	// Check if the request has an If-None-Match header
 	const ifNoneMatch = request.headers.get("If-None-Match");
 	if (ifNoneMatch) {
-		const storedEtag = await env.s3proxy_cache.get(ifNoneMatch)
+		const storedEtag = await env.s3proxy_cache.get(cacheKey)
 		if (storedEtag) {
+			// If the ETag matches, return a 304 Not Modified response
+			if (ifNoneMatch === storedEtag) {
+				console.log("ETag matches");
 			return new Response(null, {
 				status: 304,
 				headers: {
@@ -463,13 +475,12 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 					"Access-Control-Allow-Methods": "GET, OPTIONS",
 					"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
 					"Access-Control-Max-Age": "86400", // 24 hours
-				},
-			});
+					},
+				});
+			}
 		}
 	}
-	const path = new URL(request.url).pathname;
-	const requestePoster = removeLeadingSlash(path);
-	const { bucket, key } = extractBucketAndKey(requestePoster, s3ProxyClient.s3Config.videoBucket);
+
 	// Error handling
 	// if bucket has a 0 length it means that s3Config.videoBucket is not set or the requested path does not contain a bucket 
 	if (!s3ProxyClient.s3Config || !bucket.length) {
@@ -489,7 +500,7 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 		const etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(posterBuffer)).toString();
 
 		// Cache the ETag
-		await env.s3proxy_cache.put(etag, etag, {
+		await env.s3proxy_cache.put(cacheKey, etag, {
 			expirationTtl: 2592000, // 30 days
 		});
 		return new Response(posterBuffer, {
