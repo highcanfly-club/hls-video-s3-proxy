@@ -224,6 +224,8 @@ generate_multi_resolution_hls() {
             # echo "please hit enter to continue"
             # read
         done
+        # Extract a frame from the video
+        fmpeg -i "$input" -ss 00:00:01 -vframes 1 "${UUID}/${base_name}_poster.jpg"
 
         # Create master playlist file
         echo "#EXTM3U" >"${UUID}/${base_name}_master.m3u8"
