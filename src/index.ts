@@ -276,7 +276,7 @@ function isClearCodeValid(clearCode: string | null): boolean {
 	// Generate a temporary code based on the number of days since the epoch and the secret key
 	const daysSinceEpoch = Math.floor(Date.now() / (1000 * 60 * 60 * 24));
 	let returned = false;
-	s3ProxyClients.forEach((s3ProxyClient) => {
+	for(const s3ProxyClient of s3ProxyClients){
 		const secret = s3ProxyClient.s3Config.credentials.secretAccessKey;
 		const tempCode = CryptoJS.HmacSHA256(
 			String(daysSinceEpoch),
@@ -285,8 +285,9 @@ function isClearCodeValid(clearCode: string | null): boolean {
 		// Compare the temporary code to the provided clear code
 		if (clearCode === tempCode) {
 			returned = true;
+			break;
 		}
-	});
+	}
 	return returned;
 }
 
