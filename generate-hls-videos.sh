@@ -81,6 +81,13 @@ generate_multi_resolution_hls_for_pattern_files(){
     _filename=$(basename $pattern)
     _dirname=$(dirname $pattern)
 
+    find $_dirname -name "$_filename"
+    echo "Are you sure you want to process all these files? (y/n)"
+    read -r response
+    if [[ $response != "y" ]]; then
+        echo "Exiting"
+        return
+    fi
     for file in $(find $_dirname -name "$_filename"); do
         echo "Processing file: $file"
         generate_multi_resolution_hls "$file"
