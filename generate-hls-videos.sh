@@ -76,6 +76,17 @@ get_video_nb_lines() {
     ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=s=x:p=0 "$video_file"
 }
 
+generate_multi_resolution_hls_for_pattern_files(){
+    pattern=$1
+    _filename=$(basename $pattern)
+    _dirname=$(dirname $pattern)
+
+    for file in $(find $_dirname -name "$_filename"); do
+        echo "Processing file: $file"
+        generate_multi_resolution_hls "$file"
+    done
+}
+
 generate_multi_resolution_hls() {
     # nombre de secondes par segment
     HLS_SEGMENT_LENGTH=6
