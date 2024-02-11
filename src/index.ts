@@ -291,12 +291,12 @@ async function clearCacheForKey(env: Env, bucket: string, key: string): Promise<
 	await env.s3proxy_cache.delete(`${key}`);
 }
 
-function extractBucketAndKey(requestedM3u: string, defaultBucket: string): { bucket: string, key: string } {
+function extractBucketAndKey(requestedFile: string, defaultBucket: string): { bucket: string, key: string } {
 	let bucket = defaultBucket;
-	let key = requestedM3u;
-	if (requestedM3u.includes("/")) {
-		bucket = requestedM3u.split("/")[0]; // Get the bucket from the path
-		key = requestedM3u.substring(requestedM3u.indexOf("/") + 1); // Get the key from the path
+	let key = requestedFile;
+	if (requestedFile.includes("/")) {
+		bucket = requestedFile.split("/")[0]; // Get the bucket from the path
+		key = requestedFile.substring(requestedFile.indexOf("/") + 1); // Get the key from the path
 		console.log(`Bucket: ${bucket}, Key: ${key}`);
 	}
 	return { bucket, key };
@@ -349,7 +349,7 @@ async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3Pr
 
 	// Error handling
 	// if bucket has a 0 length it means that s3Config.videoBucket is not set or the requested path does not contain a bucket 
-	if (!s3Config || !bucket.length) {
+	if (!s3ProxyClient.s3Config || !bucket.length) {
 		throw new Error("Invalid S3 configuration");
 	}
 
@@ -448,6 +448,67 @@ async function handleFlushCacheRequest(request: Request, env: Env): Promise<Resp
 	return new Response("Invalid clear code", { status: 400 });
 }
 
+
+async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3ProxyClient):Promise<Response>{
+	// Check if the request has an If-None-Match header
+	const ifNoneMatch = request.headers.get("If-None-Match");
+	if (ifNoneMatch) {
+		const storedEtag = await env.s3proxy_cache.get(ifNoneMatch)
+		if (storedEtag) {
+			return new Response(null, {
+				status: 304,
+				headers: {
+					"ETag": ifNoneMatch,
+					"Access-Control-Allow-Origin": "*",
+					"Access-Control-Allow-Methods": "GET, OPTIONS",
+					"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+					"Access-Control-Max-Age": "86400", // 24 hours
+				},
+			});
+		}
+	}
+	const path = new URL(request.url).pathname;
+	const requestePoster = removeLeadingSlash(path);
+	const { bucket, key } = extractBucketAndKey(requestePoster, s3ProxyClient.s3Config.videoBucket);
+	// Error handling
+	// if bucket has a 0 length it means that s3Config.videoBucket is not set or the requested path does not contain a bucket 
+	if (!s3ProxyClient.s3Config || !bucket.length) {
+		throw new Error("Invalid S3 configuration");
+	}
+	try {
+		const posterRequest = await s3ProxyClient.s3Client.send(
+			new GetObjectCommand({ Bucket: bucket, Key: key }),
+		);
+		if (!posterRequest.Body) {
+			// If the poster file is empty, throw an error
+			throw new Error("No body");
+		}
+		// Compute the ETag as the MD5 hash of the poster
+		const posterBuffer = await posterRequest.Body?.transformToByteArray();
+		
+		const etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(posterBuffer)).toString();
+
+		// Cache the ETag
+		await env.s3proxy_cache.put(etag, etag, {
+			expirationTtl: 2592000, // 30 days
+		});
+		return new Response(posterBuffer, {
+			headers: {
+				"Content-Type": "image/jpeg",
+				"Access-Control-Allow-Origin": "*",
+				"Access-Control-Allow-Methods": "GET, OPTIONS",
+				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+				"Access-Control-Max-Age": "2592000", // 30 days
+				"Cache-Control": "public, max-age=2592000, immutable", // 30 days
+				"ETag": etag,
+			},
+		});
+	}
+	catch (error) {
+		return new Response("An error occurred", { status: 500 });
+	}
+}
+
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const randomRobin = getRandomRobin(s3ProxyClients.length);
@@ -457,6 +518,9 @@ export default {
 			const path = new URL(request.url).pathname;
 			if (path.endsWith(".m3u8")) {
 				return await handleM3U8Request(request, env, s3ProxyClient);
+			}
+			if (path.endsWith("_poster.jpg")) {
+				return await handlePosterRequest(request, env, s3ProxyClient);
 			}
 			switch (path) {
 				case "/":
