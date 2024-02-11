@@ -88,10 +88,12 @@ generate_multi_resolution_hls_for_pattern_files(){
         echo "Exiting"
         return
     fi
+
     for file in $(find $_dirname -name "$_filename"); do
         echo "Processing file: $file"
         generate_multi_resolution_hls "$file"
     done
+    unset pattern _filename _dirname
 }
 
 generate_multi_resolution_hls() {
@@ -262,5 +264,5 @@ generate_multi_resolution_hls() {
         IFS=,
         echo "${multiresolution_json[*]}"
     )"}" >"${UUID}/keys.json"
-    unset UUID
+    unset HLS_SEGMENT_LENGTH SHELLTYPE input NBLINES RATIO FRAME_RATE base_name UUID resolutions keys sorted_keys sub_resolutions generated_resolutions multiresolution_json resolution_hxv resolutionh resolutionv ratio
 }
