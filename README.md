@@ -53,6 +53,46 @@ for example for idrivee2 S3 bucket with Paris region, the configuration is as fo
 ]
 ```
 
+This is the associated schema:
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "region": {
+        "type": "string"
+      },
+      "credentials": {
+        "type": "object",
+        "properties": {
+          "accessKeyId": {
+            "type": "string"
+          },
+          "secretAccessKey": {
+            "type": "string"
+          }
+        },
+        "required": ["accessKeyId", "secretAccessKey"]
+      },
+      "endpoint": {
+        "type": "string",
+        "format": "uri"
+      },
+      "expiration": {
+        "type": "string"
+      },
+      "videoBucket": {
+        "type": "string"
+      }
+    },
+    "required": ["region", "credentials", "endpoint", "expiration", "videoBucket"]
+  }
+}
+```
+
 Replace "your-region", "your-access-key-id", "your-secret-access-key", and "your-s3-endpoint" with your S3 credentials and configuration.  
 As the array of configurations is supported, you can add multiple configurations for different S3 buckets.  
 Obviously all the buckets should contain the same files with the same names and the same directory structure.  
@@ -126,6 +166,22 @@ For multiple files using a pattern, you can use the following command:
 source generate-hls-videos.sh
 generate_multi_resolution_hls_for_pattern_files "$HOME/Downloads/*.mp4"
 ```
+
+For publishing the videos, you can use the following command:
+
+```bash
+source generate-hls-videos.sh
+publish_hls_videos s3-config.json bucket_name local_folder
+```
+
+If you want to use the script with Minio mc, you can use the following command:
+
+```bash
+source generate-hls-videos.sh
+define_mc_aliases set s3-config.json
+```
+
+It will create the mc aliases for the S3 buckets defined in the s3-config.json file. In the form `endpoint_region` for each entry in the json file.
 
 ## License
 

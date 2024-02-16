@@ -45,6 +45,127 @@
 # 	[resolution: string]: VideoDataResolution | string | string[];
 # }
 
+# s3-config.json file is used by hls-video-s3-proxy on cloudflare
+# // The S3 configuration
+# export type S3Config = {
+# 	region: string;
+# 	credentials: {
+# 		accessKeyId: string;
+# 		secretAccessKey: string;
+# 	};
+# 	endpoint: string;
+# 	expiration: string;
+# 	videoBucket: string;
+# };
+
+test_required_binaries() {
+    if ! command -v ffmpeg &>/dev/null; then
+        echo "ffmpeg could not be found see https://ffmpeg.org/download.html"
+        return 1
+    fi
+    if ! command -v ffprobe &>/dev/null; then
+        echo "ffprobe could not be found see https://ffmpeg.org/download.html"
+        return 1
+    fi
+    if ! command -v bc &>/dev/null; then
+        echo "bc could not be found"
+        return 1
+    fi
+    if ! command -v uuidgen &>/dev/null; then
+        echo "uuidgen could not be found"
+        return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        echo "jq could not be found see https://stedolan.github.io/jq/download/"
+        return 1
+    fi
+    if ! command -v mc &>/dev/null; then
+        echo "mc could not be found see https://docs.min.io/docs/minio-client-complete-guide.html"
+        return 1
+    fi
+    return 0
+}
+
+# This function is used to set or remove mc aliases based on the s3-config.json file used by hls-video-s3-proxy on cloudflare
+define_mc_aliases() {
+    test_required_binaries
+    action=$1
+    json_file=$2
+    usage="usage: define_mc_aliases action s3-config.json"
+    if [[ -z $action ]]; then
+        echo "Please provide an action"
+        echo $usage
+        return
+    fi
+    if [[ $action != "set" && $action != "rm" && $action != "remove" ]]; then
+        echo "Please provide a valid action"
+        echo $usage
+        return
+    fi
+    if [[ -z $json_file ]]; then
+        echo "Please provide the s3-config.json file used by hls-video-s3-proxy on cloudflare"
+        echo $usage
+        return
+    fi
+    for row in $(cat "${json_file}" | jq -r '.[] | @base64'); do
+            _jq() {
+            echo ${row} | base64 --decode | jq -r ${1}
+            }
+        if [[ $action == "set" ]]; then
+            mc alias set $(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' ) $(_jq '.endpoint') $(_jq '.credentials.accessKeyId') $(_jq '.credentials.secretAccessKey')
+        fi
+        if [[ $action == "rm" || $action == "remove" ]]; then
+            mc alias rm $(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' )
+        fi
+    done
+}
+
+# This function is used to publish the HLS videos to the remote s3 bucket
+publish_hls_videos(){
+    test_required_binaries
+    usage="usage: publish_hls_videos s3-config.json bucket_name local_folder"
+    json_file=$1
+    bucket_name=$2
+    local_folder=$3
+    if [[ -z $json_file ]]; then
+        echo "Please provide the s3-config.json file used by hls-video-s3-proxy on cloudflare"
+        echo $usage
+        return
+    fi
+    if [[ -z $bucket_name ]]; then
+        echo "Please provide the name of the s3 bucket"
+        echo $usage
+        return
+    fi
+    if [[ -z $local_folder ]]; then
+        echo "Please provide the local folder containing the HLS videos"
+        echo $usage
+        return
+    fi
+    define_mc_aliases "set" $json_file
+    for alias in $(get_mc_aliases $json_file); do
+        mc cp -r -a $local_folder $alias/$bucket_name/
+    done
+    define_mc_aliases "rm" $json_file
+}
+
+# This function is used to get the minio client aliases based on the s3-config.json file used by hls-video-s3-proxy on cloudflare
+get_mc_aliases(){
+    json_file=$1
+    usage="usage: get_mc_aliases s3-config.json"
+    if [[ -z $json_file ]]; then
+        echo "Please provide the s3-config.json file used by hls-video-s3-proxy on cloudflare"
+        echo $usage
+        return
+    fi
+    for row in $(cat "${json_file}" | jq -r '.[] | @base64'); do
+            _jq() {
+            echo ${row} | base64 --decode | jq -r ${1}
+            }
+        echo $(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' )
+    done
+}
+
 get_shell_name() {
     shell_name=$(basename "$SHELL")
     echo "$shell_name"
@@ -78,6 +199,12 @@ get_video_nb_lines() {
 
 generate_multi_resolution_hls_for_pattern_files(){
     pattern=$1
+    if [[ -z $pattern ]]; then
+        echo "Please provide a pattern"
+        echo "Usage: generate_multi_resolution_hls_for_pattern_files pattern"
+        echo "Example: generate_multi_resolution_hls_for_pattern_files /path/to/videos/*.mp4"
+        return
+    fi
     _filename=$(basename $pattern)
     _dirname=$(dirname $pattern)
 
@@ -97,12 +224,15 @@ generate_multi_resolution_hls_for_pattern_files(){
 }
 
 generate_multi_resolution_hls() {
+    test_required_binaries
     # nombre de secondes par segment
     HLS_SEGMENT_LENGTH=6
     SHELLTYPE=$(get_shell_name)
     input=$1
     if [[ -z $input ]]; then
         echo "Please provide a video file"
+        echo "Usage: generate_multi_resolution_hls /path/to/video.mp4"
+        echo "Example: generate_multi_resolution_hls /path/to/video.mp4"
         return
     fi
     NBLINES=$(get_video_nb_lines "$input")
