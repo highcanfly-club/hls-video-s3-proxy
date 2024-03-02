@@ -21,24 +21,24 @@
 		]
 	},
 	"dependencies": {
-		"@aws-sdk/client-s3": "^3.511.0",
-		"@aws-sdk/s3-request-presigner": "^3.511.0",
+		"@aws-sdk/client-s3": "^3.525.0",
+		"@aws-sdk/s3-request-presigner": "^3.525.0",
 		"crypto-js": "^4.2.0"
 	},
 	"devDependencies": {
-		"@cloudflare/workers-types": "^4.20240208.0",
+		"@cloudflare/workers-types": "^4.20240222.0",
 		"@types/crypto-js": "^4.2.2",
 		"@types/jest": "^29.5.12",
-		"@typescript-eslint/eslint-plugin": "^6.21.0",
-		"@typescript-eslint/parser": "^6.21.0",
-		"eslint": "^8.56.0",
+		"@typescript-eslint/eslint-plugin": "^7.1.0",
+		"@typescript-eslint/parser": "^7.1.0",
+		"eslint": "^8.57.0",
 		"eslint-config-prettier": "^9.1.0",
 		"eslint-config-typescript": "^3.0.0",
-		"miniflare": "^3.20240129.1",
+		"miniflare": "^3.20240223.0",
 		"prettier": "^3.2.5",
 		"ts-jest": "^29.1.2",
 		"ts-node": "^10.9.2",
 		"typescript": "^5.3.3",
-		"wrangler": "^3.28.1"
+		"wrangler": "^3.30.1"
 	}
 }

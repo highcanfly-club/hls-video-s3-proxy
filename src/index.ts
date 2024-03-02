@@ -25,8 +25,20 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { KVNamespace } from "@cloudflare/workers-types";
 import CryptoJS from "crypto-js";
+import { CloudflareKV } from "./cloudflare";
 
-type KVMetadata = {
+// Define an generic interface for the data storage
+export interface DataStorage {
+	list(cursor: string): Promise<{ list_complete: boolean; keys: VideoObject[]; cursor: string; cacheStatus: string | null; }>;
+	delete(key: string): Promise<void>;
+	get(key: string): Promise<string | null>;
+	getWithMetadata(key: string): Promise<{ value: string | null, metadata: KVMetadata | null }>;
+	put(key: string, value: string, expirationTtl: number ): Promise<void>;
+}
+
+let dataStorage = {} as DataStorage;
+
+export type KVMetadata = {
 	expiration: number;
 };
 
@@ -163,7 +175,7 @@ async function replaceFilesInM3U8(
 			lines[promises[index].line] = newLine;
 		});
 		newM3u8 = lines.join("\n"); // Join the lines back into a single string
-		
+
 		return newM3u8;
 	} catch (error) {
 		console.error(error);
@@ -259,13 +271,6 @@ async function getSignedM3u8(request: Request, bucket: string, key: string, s3Pr
 }
 
 /**
- * The environment object
- */
-export interface Env {
-	s3proxy_cache: KVNamespace;
-}
-
-/**
  * Checks if the provided clear code is valid.
  * The code is valid if it matches the temporary code generated based on the number of days since the epoch and the  one of the secret keys.
  *
@@ -276,7 +281,7 @@ function isClearCodeValid(clearCode: string | null): boolean {
 	// Generate a temporary code based on the number of days since the epoch and the secret key
 	const daysSinceEpoch = Math.floor(Date.now() / (1000 * 60 * 60 * 24));
 	let returned = false;
-	for(const s3ProxyClient of s3ProxyClients){
+	for (const s3ProxyClient of s3ProxyClients) {
 		const secret = s3ProxyClient.s3Config.credentials.secretAccessKey;
 		const tempCode = CryptoJS.HmacSHA256(
 			String(daysSinceEpoch),
@@ -316,13 +321,13 @@ function calculateExpirationTtl(expiration: string | undefined): number {
 
 /**
  * Clears the cache for a specific key.
- * @param env - The environment object
  * @param bucket - The name of the S3 bucket
  * @param key - The key of the S3 object
  */
-async function clearCacheForKey(env: Env, bucket: string, key: string): Promise<void> {
+async function clearCacheForKey(bucket: string, key: string): Promise<void> {
 	console.log(`Clearing cache for ${key}`);
-	await env.s3proxy_cache.delete(`${key}`);
+	// Clear the cache for the key
+	await dataStorage.delete(key);
 }
 
 /**
@@ -386,11 +391,10 @@ function getRandomRobin(max: number): number {
  * The request must contain the path to the M3U8 file.
  * If the M3U8 file is found, it is signed and returned.
  * @param request - The request object
- * @param env - The environment object
  * @param s3ProxyClient - The S3 proxy client
  * @returns A response containing the signed M3U8 file
  */
-async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3ProxyClient): Promise<Response> {
+async function handleM3U8Request(request: Request, s3ProxyClient: S3ProxyClient): Promise<Response> {
 	const url = new URL(request.url);
 	const path = new URL(request.url).pathname;
 	const requestedM3u = removeLeadingSlash(path);
@@ -410,7 +414,7 @@ async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3Pr
 		// Clear the cache if the correct secret is provided
 		if (isClearCodeValid(clearCache)) {
 			// force clearing this key from the cache
-			await clearCacheForKey(env, bucket, cacheKey);
+			await clearCacheForKey(bucket, cacheKey);
 		}
 	}
 
@@ -424,7 +428,7 @@ async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3Pr
 	try {
 		let expirationDate = new Date(Date.now() + expirationTtl * 1000);
 		// Try to get the signed M3U8 from the cache
-		const { value, metadata } = await env.s3proxy_cache.getWithMetadata(cacheKey) as { value: string, metadata: KVMetadata };
+		const { value, metadata } = await dataStorage.getWithMetadata(cacheKey);
 		signedM3u8 = value;
 		if (metadata) {
 			expirationDate = new Date(metadata.expiration * 1000);
@@ -441,10 +445,8 @@ async function handleM3U8Request(request: Request, env: Env, s3ProxyClient: S3Pr
 			// Add expiration date comment in M3U8
 			signedM3u8 = addExpirationDateCommentInM3u8(signedM3u8, expirationDate);
 			// Cache the signed M3U8
-			await env.s3proxy_cache.put(cacheKey, signedM3u8, {
-				metadata: { expiration: Math.floor(Date.now() / 1000 + expirationTtl) },
-				expirationTtl: expirationTtl,
-			});
+			await dataStorage.put(cacheKey, signedM3u8, expirationTtl);
+
 		} else {
 			console.log("Cache hit");
 		}
@@ -490,18 +492,13 @@ function getCacheKey(s3ProxyClient: S3ProxyClient, bucket: string, key: string) 
  * Deletes all keys from a KV namespace
  * @param kv - The KV namespace
  */
-async function deleteAllKeys(kv: KVNamespace) {
+async function deleteAllKeys(dataStorage: DataStorage) {
 	let keys = [] as VideoObject[];
 	let cursor = "";
 
 	// Récupérer toutes les clés
 	do {
-		const response = await kv.list({ cursor: cursor }) as {
-			list_complete: false;
-			keys: VideoObject[];
-			cursor: string;
-			cacheStatus: string | null;
-		};
+		const response = await dataStorage.list(cursor);
 		const _keys = response.keys as VideoObject[]
 		keys = _keys.concat();
 		console.log(`Got ${response.keys} keys`);
@@ -511,7 +508,7 @@ async function deleteAllKeys(kv: KVNamespace) {
 	console.log(`Deleting ${keys.length} keys`);
 	// Supprimer toutes les clés
 	for (const key of keys) {
-		await kv.delete(key.name);
+		await dataStorage.delete(key.name);
 	}
 }
 
@@ -520,10 +517,9 @@ async function deleteAllKeys(kv: KVNamespace) {
  * The request must contain a query parameter "key" with the clear code.
  * If the clear code is valid, the entire cache is cleared.
  * @param request - The request object
- * @param env - The environment object
  * @returns A response indicating whether the cache was cleared
  */
-async function handleFlushCacheRequest(request: Request, env: Env): Promise<Response> {
+async function handleFlushCacheRequest(request: Request): Promise<Response> {
 	const url = new URL(request.url);
 	const params = url.searchParams;
 	const clearCache = params.get("key");
@@ -531,7 +527,7 @@ async function handleFlushCacheRequest(request: Request, env: Env): Promise<Resp
 		// Clear the cache if the correct secret is provided
 		if (isClearCodeValid(clearCache)) {
 			// Clear the entire cache
-			await deleteAllKeys(env.s3proxy_cache);
+			await deleteAllKeys(dataStorage as DataStorage);
 			return new Response("Cache cleared", { status: 200 });
 		}
 	}
@@ -542,12 +538,10 @@ async function handleFlushCacheRequest(request: Request, env: Env): Promise<Resp
  * Retrieves a poster from an S3 bucket and returns it
  * Cache the ETag for avoiding to download the poster each time
  * @param request - The request object
- * @param env - The environment object
  * @param s3ProxyClient - The S3 proxy client
  * @returns The poster
  */
-async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3ProxyClient): Promise<Response> {
-
+async function handlePosterRequest(request: Request, s3ProxyClient: S3ProxyClient): Promise<Response> {
 	const path = new URL(request.url).pathname;
 	const requestePoster = removeLeadingSlash(path);
 	const { bucket, key } = extractBucketAndKey(requestePoster, s3ProxyClient.s3Config.videoBucket);
@@ -555,7 +549,7 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 	// Check if the request has an If-None-Match header
 	const ifNoneMatch = request.headers.get("If-None-Match");
 	if (ifNoneMatch) {
-		const storedEtag = await env.s3proxy_cache.get(cacheKey)
+		const storedEtag = await dataStorage.get(cacheKey);
 		if (storedEtag) {
 			// If the ETag matches, return a 304 Not Modified response
 			if (ifNoneMatch === storedEtag) {
@@ -589,13 +583,19 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 		}
 		// Compute the ETag as the MD5 hash of the poster
 		const posterBuffer = await posterRequest.Body?.transformToByteArray();
+		const storedEtag = await dataStorage.get(cacheKey);
+		let etag = "" as string;
 
-		const etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(posterBuffer)).toString();
+		if (storedEtag) {
+			// If the ETag is already stored, use it
+			etag = storedEtag;
+		} else {
+			// If the ETag is not stored, compute it and store it
+			const posterBuffer = await posterRequest.Body?.transformToByteArray();
+			etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(posterBuffer)).toString();
+			await dataStorage.put(cacheKey, etag, 2592000);
+		}
 
-		// Cache the ETag
-		await env.s3proxy_cache.put(cacheKey, etag, {
-			expirationTtl: 2592000, // 30 days
-		});
 		return new Response(posterBuffer, {
 			headers: {
 				"Content-Type": "image/jpeg",
@@ -613,20 +613,28 @@ async function handlePosterRequest(request: Request, env: Env, s3ProxyClient: S3
 	}
 }
 
+/**
+ * The environment object
+ */
+export interface Env {
+	s3proxy_cache: KVNamespace;
+}
+
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		// Get a random S3 proxy client
 		const randomRobin = getRandomRobin(s3ProxyClients.length);
 		const s3ProxyClient = s3ProxyClients[randomRobin];
+		dataStorage = new CloudflareKV(env.s3proxy_cache);
 		console.log(`Using S3 client ${randomRobin}`);
 
 		if (request.method === "GET") {
 			const path = new URL(request.url).pathname;
 			if (path.endsWith(".m3u8")) {
-				return await handleM3U8Request(request, env, s3ProxyClient);
+				return await handleM3U8Request(request, s3ProxyClient);
 			}
 			if (path.endsWith("_poster.jpg")) {
-				return await handlePosterRequest(request, env, s3ProxyClient);
+				return await handlePosterRequest(request, s3ProxyClient);
 			}
 			switch (path) {
 				case "/":
@@ -634,7 +642,7 @@ export default {
 				case "/favicon.ico":
 					return new Response(null, { status: 204 });
 				case "/flush-cache":
-					return handleFlushCacheRequest(request, env);
+					return handleFlushCacheRequest(request);
 				case "/health":
 					return new Response("OK", { status: 200 });
 				case "/robots.txt":
