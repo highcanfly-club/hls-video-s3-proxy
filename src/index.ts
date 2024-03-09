@@ -576,12 +576,14 @@ async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClie
 	let ifNoneMatch = null as string | null;
 	if (Object.prototype.hasOwnProperty.call(request.headers, 'If-None-Match')) {
 		ifNoneMatch = request.headers["If-None-Match"];
+	} else if (Object.prototype.hasOwnProperty.call(request.headers, 'if-none-match')) {
+		ifNoneMatch = request.headers["if-none-match"];
 	}
 	if (ifNoneMatch !== null && ifNoneMatch.length > 0) {
 		const storedEtag = await dataStorage.get(cacheKey);
 		if (storedEtag) {
 			// If the ETag matches, return a 304 Not Modified response
-			if (ifNoneMatch === storedEtag) {
+			if (ifNoneMatch === storedEtag || ifNoneMatch === `W/"${storedEtag}"` || ifNoneMatch === `"${storedEtag}"`) {
 				console.log("ETag matches");
 				return ({
 					body: null,

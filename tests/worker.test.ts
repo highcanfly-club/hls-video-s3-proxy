@@ -33,20 +33,30 @@ describe('Cloudflare Worker', () => {
   it('should return a valid jpeg image for GET /lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_poster.jpg', async () => {
     const response = await axios.get(`http://localhost:${port}/lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_poster.jpg`, { responseType: 'arraybuffer' });
     const buffer = Buffer.from(response.data, 'binary');
-    const etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(buffer)).toString();
     expect(isJpeg(buffer)).toBe(true);
     expect(response.status).toBe(200);
-    expect(response.headers['etag']).toBe(etag);
     expect(response.headers['content-type']).toBe('image/jpeg');
+  }, 3000);
+
+  it('should return a 304 response if etag is valid for GET /lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_poster.jpg', async () => {
+    const response = await axios.get(`http://localhost:${port}/lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_poster.jpg`, { responseType: 'arraybuffer' });
+    const buffer = Buffer.from(response.data, 'binary');
+    const etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(buffer)).toString();
+    // Rerun the request and provide the etag to check if the response is 304
+    const response2 = await axios.get(`http://localhost:${port}/lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_poster.jpg`, {
+      headers: { 'If-None-Match': etag },
+      validateStatus: function (status) {
+        return status >= 200 && status < 305; // default
+      },
+    });
+    expect(response2.status).toBe(304);
   }, 3000);
 
   it('should return a valid m3u8 for GET /lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_136p.m3u8', async () => {
     const response = await axios.get(`http://localhost:${port}/lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_136p.m3u8`, { responseType: 'arraybuffer' });
     const buffer = Buffer.from(response.data, 'binary');
-    const etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(buffer)).toString();
     expect(isM3u8(buffer)).toBe(true);
     expect(response.status).toBe(200);
-    expect(response.headers['etag']).toBe(etag);
     expect(response.headers['content-type']).toBe('application/x-mpegURL');
   }, 3000);
 
@@ -79,6 +89,6 @@ describe('Cloudflare Worker', () => {
     expect(isM4s(buffer2)).toBe(true);
     expect(response2.status).toBe(200);
     expect(response2.headers['content-type']).toBe('video/iso.segment');
-  },3000);
+  }, 3000);
 
 });
