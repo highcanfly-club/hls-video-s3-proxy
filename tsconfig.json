@@ -1,8 +1,8 @@
 {
 	"compilerOptions": {
 		"target": "esnext",
-		"module": "esnext",
-		"moduleResolution": "node",
+		"module": "NodeNext",
+		"moduleResolution": "NodeNext",
 		"importHelpers": true,
 		"isolatedModules": true,
 		"noEmit": true,
@@ -17,6 +17,6 @@
 			"@/*": ["src/*"],
 		},
 	},
-	"include": ["src/**/*.ts"],
-	"exclude": ["node_modules"],
+	"include": ["src/**/*.ts","tests/**/*.d.ts"],
+	"exclude": ["node_modules"]
 }

@@ -1,7 +1,27 @@
 import fs from "fs";
-import type { S3Config } from "./src/index";
+import { gitlogPromise, GitlogOptions } from "gitlog";
+import type { S3Config } from "./src/index.js";
 
 console.log("Preparing environment...");
+
+const commits = await gitlogPromise({
+    repo: ".",
+    number: 1,
+    fields: ["authorDate"],
+  } as GitlogOptions);
+  
+  const commit = {
+    date: new Date(commits[0].authorDate),
+  };
+  
+  fs.writeFile(
+    "./src/git-config.json",
+    JSON.stringify(commit),
+    "utf8",
+    function (err) {
+      if (err) return console.log(err);
+    }
+  );
 
 /*generate config.json file with s3 credentials*/
 if (
