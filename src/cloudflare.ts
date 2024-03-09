@@ -1,6 +1,6 @@
 // Implémenter l'interface pour Cloudflare KV
 import type { KVNamespace } from "@cloudflare/workers-types";
-import { DataStorage, VideoObject, KVMetadata } from "./index";
+import { DataStorage, VideoObject, KVMetadata, incomingHandler, S3ProxyClient, IRequest } from "./index.js";
 
 export class CloudflareKV implements DataStorage {
     kv: KVNamespace;
@@ -36,3 +36,25 @@ export class CloudflareKV implements DataStorage {
     }
 
 }
+
+/**
+ * The environment object
+ */
+export interface Env {
+	s3proxy_cache: KVNamespace;
+}
+
+/**
+ * Cloudflare wrapper for generic handler
+ * @param request - The request object as IRequest
+ * @returns The response object as Response
+ */
+export async  function cloudflareWrapper(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<Response> 
+	{
+		const iResponse = await incomingHandler(request, s3ProxyClient);
+		return new Response(iResponse.body, {
+			status: iResponse.status,
+			headers: iResponse.headers,
+		});
+	}
+

@@ -1,5 +1,5 @@
 import fs from "fs";
-import type { S3Config } from "./src/index";
+import type { S3Config } from "./src/index.js";
 
 console.log("Preparing environment...");
 

@@ -23,11 +23,10 @@
 import _s3Config from "./s3-config.json";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import type { KVNamespace } from "@cloudflare/workers-types";
 import CryptoJS from "crypto-js";
-import { CloudflareKV } from "./cloudflare";
+import { CloudflareKV, Env, cloudflareWrapper } from "./cloudflare.js";
 
-// Define an generic interface for the data storage
+// Define a generic interface for the data storage
 export interface DataStorage {
 	list(cursor: string): Promise<{ list_complete: boolean; keys: VideoObject[]; cursor: string; cacheStatus: string | null; }>;
 	delete(key: string): Promise<void>;
@@ -36,6 +35,21 @@ export interface DataStorage {
 	put(key: string, value: string, expirationTtl: number ): Promise<void>;
 }
 
+// Define a generic Request for handling Cloudflare Workers and Azure Functions
+export interface IRequest {
+	url: string;
+	method: string;
+	headers: { [key: string]: string };
+}
+
+// Define a generic Response for handling Cloudflare Workers and Azure Functions
+export interface IResponse {
+	status: number;
+	headers: { [key: string]: string };
+	body: string | Uint8Array | null;
+}
+
+// Shared data storage
 let dataStorage = {} as DataStorage;
 
 export type KVMetadata = {
@@ -188,7 +202,7 @@ async function replaceFilesInM3U8(
  * @param request - The request object
  * @returns The base path of the request URL.
  */
-function getBasePath(request: Request): string {
+function getBasePath(request: IRequest): string {
 	const urlObj = new URL(request.url);
 	const path = urlObj.pathname.split("/").slice(0, -1).join("/").substring(1);
 	console.log(`Base path: ${path}`);
@@ -203,7 +217,7 @@ function getBasePath(request: Request): string {
  * @returns
  * @throws {Error} If the request or M3U8 file is not provided
  */
-function replaceM3u8Urls(request: Request, m3u8: string): string {
+function replaceM3u8Urls(request: IRequest, m3u8: string): string {
 	if (!request || !m3u8) {
 		throw new Error("No request or M3U8 file provided");
 	}
@@ -238,7 +252,7 @@ function replaceM3u8Urls(request: Request, m3u8: string): string {
  * @returns The signed M3U8 file
  * @throws {Error} If the requested M3U8 file is not found
  */
-async function getSignedM3u8(request: Request, bucket: string, key: string, s3ProxyClient: S3ProxyClient) {
+async function getSignedM3u8(request: IRequest, bucket: string, key: string, s3ProxyClient: S3ProxyClient) {
 	if (!bucket || !key) {
 		throw new Error("Invalid bucket or key");
 	}
@@ -394,7 +408,7 @@ function getRandomRobin(max: number): number {
  * @param s3ProxyClient - The S3 proxy client
  * @returns A response containing the signed M3U8 file
  */
-async function handleM3U8Request(request: Request, s3ProxyClient: S3ProxyClient): Promise<Response> {
+async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<IResponse>  {
 	const url = new URL(request.url);
 	const path = new URL(request.url).pathname;
 	const requestedM3u = removeLeadingSlash(path);
@@ -459,21 +473,27 @@ async function handleM3U8Request(request: Request, s3ProxyClient: S3ProxyClient)
 		// Calculate the max age and expiration date for the response
 		const maxAge = Math.floor((expirationDate.getTime() - Date.now()) / 1000);
 
-		return new Response(signedM3u8, {
-			headers: {
-				"Content-Type": HSL_MIME_TYPE,
-				"Access-Control-Allow-Origin": "*",
-				"Access-Control-Allow-Methods": "GET, OPTIONS",
-				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
-				"Access-Control-Max-Age": "86400", // 24 hours 
-				"Cache-Control": `public, max-age=${maxAge}`,
-				"Expires": expirationDate.toUTCString(),
-			},
-		});
+		return {
+            status: 200,
+            headers: {
+                "Content-Type": HSL_MIME_TYPE,
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+                "Access-Control-Max-Age": "86400", // 24 hours 
+                "Cache-Control": `public, max-age=${maxAge}`,
+                "Expires": expirationDate.toUTCString(),
+            },
+            body: signedM3u8
+        };
 	} catch (error) {
 		// Handle asynchronous errors
 		console.error(error);
-		return new Response("An error occurred", { status: 500 });
+		return {
+            status: 500,
+            headers: {},
+            body: "An error occurred"
+        };
 	}
 }
 
@@ -519,7 +539,7 @@ async function deleteAllKeys(dataStorage: DataStorage) {
  * @param request - The request object
  * @returns A response indicating whether the cache was cleared
  */
-async function handleFlushCacheRequest(request: Request): Promise<Response> {
+async function handleFlushCacheRequest(request: IRequest): Promise<IResponse> {
 	const url = new URL(request.url);
 	const params = url.searchParams;
 	const clearCache = params.get("key");
@@ -528,10 +548,16 @@ async function handleFlushCacheRequest(request: Request): Promise<Response> {
 		if (isClearCodeValid(clearCache)) {
 			// Clear the entire cache
 			await deleteAllKeys(dataStorage as DataStorage);
-			return new Response("Cache cleared", { status: 200 });
+			return { 
+				body: "Cache cleared",
+				headers: {},
+				status: 200 };
 		}
 	}
-	return new Response("Invalid clear code", { status: 400 });
+	return { 
+		body: "Invalid clear code",
+		headers: {},
+		status: 403 };
 }
 
 /**
@@ -541,20 +567,24 @@ async function handleFlushCacheRequest(request: Request): Promise<Response> {
  * @param s3ProxyClient - The S3 proxy client
  * @returns The poster
  */
-async function handlePosterRequest(request: Request, s3ProxyClient: S3ProxyClient): Promise<Response> {
-	const path = new URL(request.url).pathname;
+async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<IResponse> {
+  	const path = new URL(request.url).pathname;
 	const requestePoster = removeLeadingSlash(path);
 	const { bucket, key } = extractBucketAndKey(requestePoster, s3ProxyClient.s3Config.videoBucket);
 	const cacheKey = getCacheKey(s3ProxyClient, bucket, key);
 	// Check if the request has an If-None-Match header
-	const ifNoneMatch = request.headers.get("If-None-Match");
-	if (ifNoneMatch) {
+	let ifNoneMatch = null as string | null;
+	if (Object.prototype.hasOwnProperty.call(request.headers, 'If-None-Match')) {
+		ifNoneMatch = request.headers["If-None-Match"];
+	}
+	if (ifNoneMatch !== null && ifNoneMatch.length > 0) {
 		const storedEtag = await dataStorage.get(cacheKey);
 		if (storedEtag) {
 			// If the ETag matches, return a 304 Not Modified response
 			if (ifNoneMatch === storedEtag) {
 				console.log("ETag matches");
-				return new Response(null, {
+				return ({
+					body: null,
 					status: 304,
 					headers: {
 						"ETag": ifNoneMatch,
@@ -591,12 +621,12 @@ async function handlePosterRequest(request: Request, s3ProxyClient: S3ProxyClien
 			etag = storedEtag;
 		} else {
 			// If the ETag is not stored, compute it and store it
-			const posterBuffer = await posterRequest.Body?.transformToByteArray();
 			etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(posterBuffer)).toString();
 			await dataStorage.put(cacheKey, etag, 2592000);
 		}
 
-		return new Response(posterBuffer, {
+		return  {
+			status: 200,
 			headers: {
 				"Content-Type": "image/jpeg",
 				"Access-Control-Allow-Origin": "*",
@@ -606,18 +636,63 @@ async function handlePosterRequest(request: Request, s3ProxyClient: S3ProxyClien
 				"Cache-Control": `public, max-age=${POSTER_CACHE_TTL}, immutable`, // 30 days
 				"ETag": etag,
 			},
-		});
+			body: posterBuffer,
+		};
 	}
 	catch (error) {
-		return new Response("An error occurred", { status: 500 });
+		return {
+            status: 500,
+            headers: {},
+            body: `An error occurred: ${error}`
+        };
 	}
 }
 
 /**
- * The environment object
+ * Handles an incoming request in a generic way for being used in Cloudflare Workers and Azure Functions
+ * @param request - The request object as IRequest
+ * @param s3ProxyClient - The S3 proxy client
+ * @returns The response object as IResponse
  */
-export interface Env {
-	s3proxy_cache: KVNamespace;
+export async function incomingHandler(request: IRequest,s3ProxyClient: S3ProxyClient): Promise<IResponse> {
+	if (request.method === "GET") {
+		const path = new URL(request.url).pathname;
+		if (path.endsWith(".m3u8")) {
+			return await handleM3U8Request(request, s3ProxyClient);
+		}
+		if (path.endsWith("_poster.jpg")) {
+			return await handlePosterRequest(request, s3ProxyClient);
+		}
+		switch (path) {
+			case "/":
+				return { body:"Welcome to the S3 Proxy", status: 200, headers: {}} as IResponse;
+			case "/favicon.ico":
+				return { body:"Not found", status: 404, headers: {}} as IResponse;
+			case "/flush-cache":
+				return handleFlushCacheRequest(request);
+			case "/health":
+				return { body:"OK", status: 200, headers: {}} as IResponse;
+			case "/robots.txt":
+				return { body:"User-agent: *\nDisallow: /", status: 200, headers: {}} as IResponse;
+			default:
+				return { body:"Not found", status: 404, headers: {}} as IResponse;
+		}
+
+	} else if (request.method === "OPTIONS") {
+		return {
+			status: 200,
+			body: null,
+			headers: {
+				"Access-Control-Allow-Origin": "*",
+				"Access-Control-Allow-Methods": "GET, OPTIONS",
+				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+				"Access-Control-Max-Age": "86400", // 24 hours
+			},
+		};
+	}
+	else {
+		return { body: "Method not allowed",status: 405, headers: {} } as IResponse;
+	}
 }
 
 export default {
@@ -627,42 +702,11 @@ export default {
 		const s3ProxyClient = s3ProxyClients[randomRobin];
 		dataStorage = new CloudflareKV(env.s3proxy_cache);
 		console.log(`Using S3 client ${randomRobin}`);
-
-		if (request.method === "GET") {
-			const path = new URL(request.url).pathname;
-			if (path.endsWith(".m3u8")) {
-				return await handleM3U8Request(request, s3ProxyClient);
-			}
-			if (path.endsWith("_poster.jpg")) {
-				return await handlePosterRequest(request, s3ProxyClient);
-			}
-			switch (path) {
-				case "/":
-					return new Response("Welcome to the S3 Proxy", { status: 200 });
-				case "/favicon.ico":
-					return new Response(null, { status: 204 });
-				case "/flush-cache":
-					return handleFlushCacheRequest(request);
-				case "/health":
-					return new Response("OK", { status: 200 });
-				case "/robots.txt":
-					return new Response("User-agent: *\nDisallow: /", { status: 200 });
-				default:
-					return new Response("Not found", { status: 404 });
-			}
-
-		} else if (request.method === "OPTIONS") {
-			return new Response(null, {
-				headers: {
-					"Access-Control-Allow-Origin": "*",
-					"Access-Control-Allow-Methods": "GET, OPTIONS",
-					"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
-					"Access-Control-Max-Age": "86400", // 24 hours
-				},
-			});
-		}
-		else {
-			return new Response("Method not allowed", { status: 405 });
-		}
+		const iRequest = {
+			url: request.url,
+			method: request.method,
+			headers: Object.fromEntries(request.headers.entries()),
+		};
+		return cloudflareWrapper(iRequest, s3ProxyClient);
 	}
 }
