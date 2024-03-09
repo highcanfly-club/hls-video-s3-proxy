@@ -21,6 +21,7 @@
  */
 
 import _s3Config from "./s3-config.json";
+import _git from "./git-config.json";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import CryptoJS from "crypto-js";
@@ -32,7 +33,7 @@ export interface DataStorage {
 	delete(key: string): Promise<void>;
 	get(key: string): Promise<string | null>;
 	getWithMetadata(key: string): Promise<{ value: string | null, metadata: KVMetadata | null }>;
-	put(key: string, value: string, expirationTtl: number ): Promise<void>;
+	put(key: string, value: string, expirationTtl: number): Promise<void>;
 }
 
 // Define a generic Request for handling Cloudflare Workers and Azure Functions
@@ -408,7 +409,7 @@ function getRandomRobin(max: number): number {
  * @param s3ProxyClient - The S3 proxy client
  * @returns A response containing the signed M3U8 file
  */
-async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<IResponse>  {
+async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<IResponse> {
 	const url = new URL(request.url);
 	const path = new URL(request.url).pathname;
 	const requestedM3u = removeLeadingSlash(path);
@@ -474,26 +475,27 @@ async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient
 		const maxAge = Math.floor((expirationDate.getTime() - Date.now()) / 1000);
 
 		return {
-            status: 200,
-            headers: {
-                "Content-Type": HSL_MIME_TYPE,
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
-                "Access-Control-Max-Age": "86400", // 24 hours 
-                "Cache-Control": `public, max-age=${maxAge}`,
-                "Expires": expirationDate.toUTCString(),
-            },
-            body: signedM3u8
-        };
+			status: 200,
+			headers: {
+				"Content-Type": HSL_MIME_TYPE,
+				"X-Proxy-Version": _git.date,
+				"Access-Control-Allow-Origin": "*",
+				"Access-Control-Allow-Methods": "GET, OPTIONS",
+				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+				"Access-Control-Max-Age": "86400", // 24 hours 
+				"Cache-Control": `public, max-age=${maxAge}`,
+				"Expires": expirationDate.toUTCString(),
+			},
+			body: signedM3u8
+		};
 	} catch (error) {
 		// Handle asynchronous errors
 		console.error(error);
 		return {
-            status: 500,
-            headers: {},
-            body: "An error occurred"
-        };
+			status: 500,
+			headers: {},
+			body: "An error occurred"
+		};
 	}
 }
 
@@ -548,16 +550,18 @@ async function handleFlushCacheRequest(request: IRequest): Promise<IResponse> {
 		if (isClearCodeValid(clearCache)) {
 			// Clear the entire cache
 			await deleteAllKeys(dataStorage as DataStorage);
-			return { 
+			return {
 				body: "Cache cleared",
-				headers: {},
-				status: 200 };
+				headers: { "X-Proxy-Version": _git.date, },
+				status: 200
+			};
 		}
 	}
-	return { 
+	return {
 		body: "Invalid clear code",
 		headers: {},
-		status: 403 };
+		status: 403
+	};
 }
 
 /**
@@ -568,7 +572,7 @@ async function handleFlushCacheRequest(request: IRequest): Promise<IResponse> {
  * @returns The poster
  */
 async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<IResponse> {
-  	const path = new URL(request.url).pathname;
+	const path = new URL(request.url).pathname;
 	const requestePoster = removeLeadingSlash(path);
 	const { bucket, key } = extractBucketAndKey(requestePoster, s3ProxyClient.s3Config.videoBucket);
 	const cacheKey = getCacheKey(s3ProxyClient, bucket, key);
@@ -590,6 +594,7 @@ async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClie
 					status: 304,
 					headers: {
 						"ETag": ifNoneMatch,
+						"X-Proxy-Version": _git.date,
 						"Access-Control-Allow-Origin": "*",
 						"Access-Control-Allow-Methods": "GET, OPTIONS",
 						"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
@@ -627,10 +632,11 @@ async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClie
 			await dataStorage.put(cacheKey, etag, 2592000);
 		}
 
-		return  {
+		return {
 			status: 200,
 			headers: {
 				"Content-Type": "image/jpeg",
+				"X-Proxy-Version": _git.date,
 				"Access-Control-Allow-Origin": "*",
 				"Access-Control-Allow-Methods": "GET, OPTIONS",
 				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
@@ -643,10 +649,10 @@ async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClie
 	}
 	catch (error) {
 		return {
-            status: 500,
-            headers: {},
-            body: `An error occurred: ${error}`
-        };
+			status: 500,
+			headers: {},
+			body: `An error occurred: ${error}`
+		};
 	}
 }
 
@@ -656,7 +662,7 @@ async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClie
  * @param s3ProxyClient - The S3 proxy client
  * @returns The response object as IResponse
  */
-export async function incomingHandler(request: IRequest,s3ProxyClient: S3ProxyClient): Promise<IResponse> {
+export async function incomingHandler(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<IResponse> {
 	if (request.method === "GET") {
 		const path = new URL(request.url).pathname;
 		if (path.endsWith(".m3u8")) {
@@ -667,17 +673,17 @@ export async function incomingHandler(request: IRequest,s3ProxyClient: S3ProxyCl
 		}
 		switch (path) {
 			case "/":
-				return { body:"Welcome to the S3 Proxy", status: 200, headers: {}} as IResponse;
+				return { body: "Welcome to the S3 Proxy", status: 200, headers: {} } as IResponse;
 			case "/favicon.ico":
-				return { body:"Not found", status: 404, headers: {}} as IResponse;
+				return { body: "Not found", status: 404, headers: {} } as IResponse;
 			case "/flush-cache":
 				return handleFlushCacheRequest(request);
 			case "/health":
-				return { body:"OK", status: 200, headers: {}} as IResponse;
+				return { body: "OK", status: 200, headers: {} } as IResponse;
 			case "/robots.txt":
-				return { body:"User-agent: *\nDisallow: /", status: 200, headers: {}} as IResponse;
+				return { body: "User-agent: *\nDisallow: /", status: 200, headers: {} } as IResponse;
 			default:
-				return { body:"Not found", status: 404, headers: {}} as IResponse;
+				return { body: "Not found", status: 404, headers: {} } as IResponse;
 		}
 
 	} else if (request.method === "OPTIONS") {
@@ -685,6 +691,7 @@ export async function incomingHandler(request: IRequest,s3ProxyClient: S3ProxyCl
 			status: 200,
 			body: null,
 			headers: {
+				"X-Proxy-Version": _git.date,
 				"Access-Control-Allow-Origin": "*",
 				"Access-Control-Allow-Methods": "GET, OPTIONS",
 				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
@@ -693,7 +700,7 @@ export async function incomingHandler(request: IRequest,s3ProxyClient: S3ProxyCl
 		};
 	}
 	else {
-		return { body: "Method not allowed",status: 405, headers: {} } as IResponse;
+		return { body: "Method not allowed", status: 405, headers: { "X-Proxy-Version": _git.date, } } as IResponse;
 	}
 }
 
