@@ -11,25 +11,28 @@ export class CloudflareKV implements DataStorage {
 
     async list(cursor: string) {
         const _keys = await this.kv.list({ cursor: cursor });
-        return { list_complete: _keys.list_complete, keys: _keys.keys as VideoObject[],  cursor: cursor, cacheStatus: _keys.cacheStatus };
+        return { list_complete: _keys.list_complete, keys: _keys.keys as VideoObject[], cursor: cursor, cacheStatus: _keys.cacheStatus };
     }
 
     async delete(key: string) {
         return this.kv.delete(key);
     }
 
-    async get(key: string) { 
+    async get(key: string) {
         return this.kv.get(key);
     }
-    
+
     async getWithMetadata(key: string) {
-        const _ret = await this.kv.getWithMetadata(key) ;
+        const _ret = await this.kv.getWithMetadata(key);
         return { value: _ret.value, metadata: _ret.metadata as KVMetadata };
     }
 
-    async put(key: string, value: string, expirationTtl: number ) { 
+    async put(key: string, value: string, expirationTtl: number, etag: string) {
         const options = {
-            metadata: { expiration: Math.floor(Date.now() / 1000 + expirationTtl) },
+            metadata: {
+                expiration: Math.floor(Date.now() / 1000 + expirationTtl),
+                etag: etag
+            },
             expirationTtl: expirationTtl,
         }
         return this.kv.put(key, value, options);
@@ -41,7 +44,7 @@ export class CloudflareKV implements DataStorage {
  * The environment object
  */
 export interface Env {
-	s3proxy_cache: KVNamespace;
+    s3proxy_cache: KVNamespace;
 }
 
 /**
@@ -49,12 +52,11 @@ export interface Env {
  * @param request - The request object as IRequest
  * @returns The response object as Response
  */
-export async  function cloudflareWrapper(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<Response> 
-	{
-		const iResponse = await incomingHandler(request, s3ProxyClient);
-		return new Response(iResponse.body, {
-			status: iResponse.status,
-			headers: iResponse.headers,
-		});
-	}
+export async function cloudflareWrapper(request: IRequest, s3ProxyClient: S3ProxyClient): Promise<Response> {
+    const iResponse = await incomingHandler(request, s3ProxyClient);
+    return new Response(iResponse.body, {
+        status: iResponse.status,
+        headers: iResponse.headers,
+    });
+}
 

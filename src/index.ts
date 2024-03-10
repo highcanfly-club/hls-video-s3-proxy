@@ -33,7 +33,7 @@ export interface DataStorage {
 	delete(key: string): Promise<void>;
 	get(key: string): Promise<string | null>;
 	getWithMetadata(key: string): Promise<{ value: string | null, metadata: KVMetadata | null }>;
-	put(key: string, value: string, expirationTtl: number): Promise<void>;
+	put(key: string, value: string, expirationTtl: number, etag: string): Promise<void>;
 }
 
 // Define a generic Request for handling Cloudflare Workers and Azure Functions
@@ -55,6 +55,7 @@ let dataStorage = {} as DataStorage;
 
 export type KVMetadata = {
 	expiration: number;
+	etag: string;
 };
 
 // The video object
@@ -439,13 +440,43 @@ async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient
 		throw new Error("Invalid S3 configuration");
 	}
 
+	// Check if the request has an If-None-Match header
+	let ifNoneMatch = null as string | null;
+	if (Object.prototype.hasOwnProperty.call(request.headers, 'If-None-Match')) {
+		ifNoneMatch = request.headers["If-None-Match"];
+	} else if (Object.prototype.hasOwnProperty.call(request.headers, 'if-none-match')) {
+		ifNoneMatch = request.headers["if-none-match"];
+	}
+	if (ifNoneMatch !== null && ifNoneMatch.length > 0) {
+		const { metadata } = await dataStorage.getWithMetadata(cacheKey);
+		if (metadata?.etag) {
+			// If the ETag matches, return a 304 Not Modified response
+			if (ifNoneMatch === metadata.etag || ifNoneMatch === `W/"${metadata.etag}"` || ifNoneMatch === `"${metadata.etag}"`) {
+				console.log("ETag matches");
+				return ({
+					body: null,
+					status: 304,
+					headers: {
+						"ETag": metadata.etag,
+						"X-Proxy-Version": _git.date,
+						"Access-Control-Allow-Origin": "*",
+						"Access-Control-Allow-Methods": "GET, OPTIONS",
+						"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+						"Access-Control-Max-Age": "86400", // 24 hours
+					},
+				});
+			}
+		}
+	}
 	// Get signed M3U8
 	try {
+		let etag = "";
 		let expirationDate = new Date(Date.now() + expirationTtl * 1000);
 		// Try to get the signed M3U8 from the cache
 		const { value, metadata } = await dataStorage.getWithMetadata(cacheKey);
 		signedM3u8 = value;
 		if (metadata) {
+			etag = metadata.etag;
 			expirationDate = new Date(metadata.expiration * 1000);
 			console.log(`Expiration date: ${expirationDate.toISOString()}`);
 		}
@@ -459,8 +490,10 @@ async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient
 				: "";
 			// Add expiration date comment in M3U8
 			signedM3u8 = addExpirationDateCommentInM3u8(signedM3u8, expirationDate);
+			// Calculate the ETag
+			etag = CryptoJS.MD5(signedM3u8).toString();
 			// Cache the signed M3U8
-			await dataStorage.put(cacheKey, signedM3u8, expirationTtl);
+			await dataStorage.put(cacheKey, signedM3u8, expirationTtl, etag);
 
 		} else {
 			console.log("Cache hit");
@@ -485,6 +518,7 @@ async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient
 				"Access-Control-Max-Age": "86400", // 24 hours 
 				"Cache-Control": `public, max-age=${maxAge}`,
 				"Expires": expirationDate.toUTCString(),
+				"ETag": etag,
 			},
 			body: signedM3u8
 		};
@@ -559,7 +593,7 @@ async function handleFlushCacheRequest(request: IRequest): Promise<IResponse> {
 	}
 	return {
 		body: "Invalid clear code",
-		headers: {},
+		headers: { "X-Proxy-Version": _git.date, },
 		status: 403
 	};
 }
@@ -629,7 +663,7 @@ async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClie
 		} else {
 			// If the ETag is not stored, compute it and store it
 			etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(posterBuffer)).toString();
-			await dataStorage.put(cacheKey, etag, 2592000);
+			await dataStorage.put(cacheKey, etag, 2592000, etag);
 		}
 
 		return {
@@ -673,17 +707,17 @@ export async function incomingHandler(request: IRequest, s3ProxyClient: S3ProxyC
 		}
 		switch (path) {
 			case "/":
-				return { body: "Welcome to the S3 Proxy", status: 200, headers: {} } as IResponse;
+				return { body: "Welcome to the S3 Proxy", status: 200, headers: { "X-Proxy-Version": _git.date, } } as IResponse;
 			case "/favicon.ico":
-				return { body: "Not found", status: 404, headers: {} } as IResponse;
+				return { body: "Not found", status: 404, headers: { "X-Proxy-Version": _git.date, } } as IResponse;
 			case "/flush-cache":
 				return handleFlushCacheRequest(request);
 			case "/health":
-				return { body: "OK", status: 200, headers: {} } as IResponse;
+				return { body: "OK", status: 200, headers: { "X-Proxy-Version": _git.date, } } as IResponse;
 			case "/robots.txt":
-				return { body: "User-agent: *\nDisallow: /", status: 200, headers: {} } as IResponse;
+				return { body: "User-agent: *\nDisallow: /", status: 200, headers: { "X-Proxy-Version": _git.date, } } as IResponse;
 			default:
-				return { body: "Not found", status: 404, headers: {} } as IResponse;
+				return { body: "Not found", status: 404, headers: { "X-Proxy-Version": _git.date, } } as IResponse;
 		}
 
 	} else if (request.method === "OPTIONS") {

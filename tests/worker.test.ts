@@ -52,6 +52,20 @@ describe('Cloudflare Worker', () => {
     expect(response2.status).toBe(304);
   }, 3000);
 
+  it('should return a 304 response if etag is valid for GET /lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_136p.m3u8', async () => {
+    const response = await axios.get(`http://localhost:${port}/lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_136p.m3u8`, { responseType: 'arraybuffer' });
+    const buffer = Buffer.from(response.data, 'binary');
+    const etag = CryptoJS.MD5(CryptoJS.lib.WordArray.create(buffer)).toString();
+    // Rerun the request and provide the etag to check if the response is 304
+    const response2 = await axios.get(`http://localhost:${port}/lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_136p.m3u8`, {
+      headers: { 'If-None-Match': etag },
+      validateStatus: function (status) {
+        return status >= 200 && status < 305; // default
+      },
+    });
+    expect(response2.status).toBe(304);
+  }, 3000);
+
   it('should return a valid m3u8 for GET /lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_136p.m3u8', async () => {
     const response = await axios.get(`http://localhost:${port}/lesailesdumontblanc-videos/admb-v1.mov/admb-v1.mov_136p.m3u8`, { responseType: 'arraybuffer' });
     const buffer = Buffer.from(response.data, 'binary');
