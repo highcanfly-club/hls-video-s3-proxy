@@ -462,6 +462,7 @@ async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient
 						"Access-Control-Allow-Origin": "*",
 						"Access-Control-Allow-Methods": "GET, OPTIONS",
 						"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+						"Access-Control-Expose-Headers": "ETag",
 						"Access-Control-Max-Age": "86400", // 24 hours
 					},
 				});
@@ -515,6 +516,7 @@ async function handleM3U8Request(request: IRequest, s3ProxyClient: S3ProxyClient
 				"Access-Control-Allow-Origin": "*",
 				"Access-Control-Allow-Methods": "GET, OPTIONS",
 				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+				"Access-Control-Expose-Headers": "ETag",
 				"Access-Control-Max-Age": "86400", // 24 hours 
 				"Cache-Control": `public, max-age=${maxAge}`,
 				"Expires": expirationDate.toUTCString(),
@@ -632,6 +634,7 @@ async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClie
 						"Access-Control-Allow-Origin": "*",
 						"Access-Control-Allow-Methods": "GET, OPTIONS",
 						"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+						"Access-Control-Expose-Headers": "ETag",
 						"Access-Control-Max-Age": String(POSTER_CACHE_TTL), // 30 days
 					},
 				});
@@ -675,6 +678,7 @@ async function handlePosterRequest(request: IRequest, s3ProxyClient: S3ProxyClie
 				"Access-Control-Allow-Methods": "GET, OPTIONS",
 				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
 				"Access-Control-Max-Age": String(POSTER_CACHE_TTL), // 30 days
+				"Access-Control-Expose-Headers": "ETag",
 				"Cache-Control": `public, max-age=${POSTER_CACHE_TTL}, immutable`, // 30 days
 				"ETag": etag,
 			},
@@ -729,6 +733,7 @@ export async function incomingHandler(request: IRequest, s3ProxyClient: S3ProxyC
 				"Access-Control-Allow-Origin": "*",
 				"Access-Control-Allow-Methods": "GET, OPTIONS",
 				"Access-Control-Allow-Headers": "Content-Type, Origin, Accept",
+				"Access-Control-Expose-Headers": "ETag",
 				"Access-Control-Max-Age": "86400", // 24 hours
 			},
 		};
