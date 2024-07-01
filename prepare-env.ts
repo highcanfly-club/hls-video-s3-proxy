@@ -1,27 +1,7 @@
 import fs from "fs";
-import { gitlogPromise, GitlogOptions } from "gitlog";
-import type { S3Config } from "./src/index.js";
+import type { S3Config } from "./src/index";
 
 console.log("Preparing environment...");
-
-const commits = await gitlogPromise({
-    repo: ".",
-    number: 1,
-    fields: ["authorDate"],
-  } as GitlogOptions);
-  
-  const commit = {
-    date: new Date(commits[0].authorDate),
-  };
-  
-  fs.writeFile(
-    "./src/git-config.json",
-    JSON.stringify(commit),
-    "utf8",
-    function (err) {
-      if (err) return console.log(err);
-    }
-  );
 
 /*generate config.json file with s3 credentials*/
 if (
@@ -78,6 +58,22 @@ for (let i = 0; i < s3Regions.length; i++) {
 fs.writeFile(
     "./src/s3-config.json",
     JSON.stringify(s3confs, null, 2),
+    "utf8",
+    function (err) {
+        if (err) return console.log(err);
+    }
+);
+
+const indexation = {allowIndexation: process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "false" || process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "0"};
+if (process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "true" || process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "1") {
+    indexation.allowIndexation = false;
+}else
+{
+    indexation.allowIndexation = true;
+}
+fs.writeFile(
+    "./src/indexation-config.json",
+    JSON.stringify(indexation, null, 2),
     "utf8",
     function (err) {
         if (err) return console.log(err);
