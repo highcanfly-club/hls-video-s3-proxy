@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "wrangler dev src/index.ts",
     "prepare-env": "node --import 'data:text/javascript,import { register } from \"node:module\"; import { pathToFileURL } from \"node:url\"; register(\"ts-node/esm\", pathToFileURL(\"./\"));' ./prepare-env.ts ",
-    "publish": "npm run prepare-env && npx wrangler deploy",
+    "generate-sitemap": ". ./generate-hls-videos.sh &&generate_sitemap_xml src/config.json src/s3-config.json",
+    "publish": "npm run prepare-env && npm run generate-sitemap && npx wrangler deploy",
     "format": "prettier --write  '*.{json,js}' 'src/**/*.{js,ts}' 'test/**/*.{js,ts}'",
     "lint": "eslint --max-warnings=0 src && prettier --check '*.{json,js}' 'src/**/*.{js,ts}' 'test/**/*.{js,ts}'",
     "test": "npm run prepare-env && npm run _test",

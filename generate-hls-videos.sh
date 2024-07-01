@@ -139,10 +139,10 @@ define_mc_aliases() {
             echo ${row} | base64 --decode | jq -r ${1}
             }
         if [[ $action == "set" ]]; then
-            mc alias set $(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' ) $(_jq '.endpoint') $(_jq '.credentials.accessKeyId') $(_jq '.credentials.secretAccessKey')
+            mc alias set S3_$(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' ) $(_jq '.endpoint') $(_jq '.credentials.accessKeyId') $(_jq '.credentials.secretAccessKey')
         fi
         if [[ $action == "rm" || $action == "remove" ]]; then
-            mc alias rm $(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' )
+            mc alias rm S3_$(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' )
         fi
     done
 }
@@ -185,6 +185,50 @@ publish_hls_videos(){
     define_mc_aliases "rm" $json_file
 }
 
+# Generate a sitemap.xml file for HLS videos
+# This function generates a sitemap.xml by using mc find to list all the HLS videos in the remote S3 bucket.
+
+# Function to generate a sitemap.xml file for HLS videos
+# Usage: generate_sitemap_xml config.json s3-config.json
+# Parameters:
+#   - config_json: The path to the config.json file used by hls-video-s3-proxy on Cloudflare
+#   - json_file: The path to the s3-config.json file used by hls-video-s3-proxy on Cloudflare
+# Returns:
+#   None but file sitemap.xml is generated
+generate_sitemap_xml(){
+    test_required_binaries
+    usage="usage: generate_sitemap_xml config.json s3-config.json"
+    config_json=$1
+    if [[ -z $config_json ]]; then
+        echo "Please provide the config.json used by hls-video-s3-proxy on Cloudflare"
+        echo $usage
+        return
+    fi
+    base_url=$(cat $config_json | jq -r '.s3ProxyBaseUrl')
+    json_file=$2
+    if [[ -z $json_file ]]; then
+        echo "Please provide the s3-config.json file used by hls-video-s3-proxy on Cloudflare"
+        echo $usage
+        return
+    fi
+    bucket_name=$(cat $json_file | jq -r '.[0].videoBucket')
+
+    define_mc_aliases "set" $json_file
+    alias=$(get_mc_aliases $json_file | head -n 1)
+    echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" >src/sitemap.xml
+    echo "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">" >>src/sitemap.xml
+    mc find $alias/$bucket_name/ -name "*master.m3u8" | while IFS= read -r line; do
+        processed_path=$(echo "$line" | sed 's^[^/]*/^^')
+        echo "<url><loc>$base_url/$processed_path</loc></url>"
+    done >>src/sitemap.xml
+    
+    echo "</urlset>" >>src/sitemap.xml
+    define_mc_aliases "rm" $json_file
+
+    # generate a typescript file with the sitemap as a string
+    echo "export const sitemap = \`$(cat src/sitemap.xml)\`" >src/sitemap.ts
+}
+
 # This function is used to get the minio client aliases based on the s3-config.json file used by hls-video-s3-proxy on cloudflare
 get_mc_aliases(){
     json_file=$1
@@ -198,7 +242,7 @@ get_mc_aliases(){
             _jq() {
             echo ${row} | base64 --decode | jq -r ${1}
             }
-        echo $(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' )
+        echo S3_$(_jq '.endpoint' | sed -n 's|.*//\([^\.]*\)\.\([^\.]*\)\..*|\1\_\2|p' )
     done
 }
 

@@ -63,17 +63,25 @@ fs.writeFile(
         if (err) return console.log(err);
     }
 );
+if (!process.env.S3_PROXY_BASE_URL){
+    console.error("Missing S3_PROXY_BASE_URL");
+    process.exit(1);
+}
 
-const indexation = {allowIndexation: process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "false" || process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "0"};
+const config = {
+    allowIndexation: process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "false" || process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "0",
+    s3ProxyBaseUrl: process.env.S3_PROXY_BASE_URL,
+};
+
 if (process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "true" || process.env.HLS_VIDEO_S3_PROXY_DISALLOW_INDEXATION === "1") {
-    indexation.allowIndexation = false;
+    config.allowIndexation = false;
 }else
 {
-    indexation.allowIndexation = true;
+    config.allowIndexation = true;
 }
 fs.writeFile(
-    "./src/indexation-config.json",
-    JSON.stringify(indexation, null, 2),
+    "./src/config.json",
+    JSON.stringify(config, null, 2),
     "utf8",
     function (err) {
         if (err) return console.log(err);

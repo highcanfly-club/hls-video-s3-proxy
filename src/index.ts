@@ -25,7 +25,8 @@ import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { KVNamespace } from "@cloudflare/workers-types";
 import CryptoJS from "crypto-js";
-import indexation from "./indexation-config.json";
+import indexation from "./config.json";
+import { sitemap } from "./sitemap.js";
 
 type KVMetadata = {
 	expiration: number;
@@ -535,6 +536,12 @@ export default {
 					return new Response("OK", { status: 200 });
 				case "/robots.txt":
 					return new Response(`User-agent: *\nDisallow: ${indexation.allowIndexation ? '' : '/'}`, { status: 200 });
+				case "/sitemap.xml":
+					return new Response(sitemap, {
+						headers: {
+							"Content-Type": "application/xml",
+						},
+					});
 				default:
 					return new Response("Not found", { status: 404 });
 			}
