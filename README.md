@@ -150,14 +150,14 @@ Edit the script for defining your target resolutions.
 Here is an example of how to use the script:
 
 ```bash
-source generate-hls-videos.sh
+source ./generate-hls-videos.sh
 generate_multi_resolution_hls "your-video.mp4"
 # it creates a directory with a uuid random name if the "your-video" directory exists
 # now you can upload the videos to the S3 bucket
 # you can create an alias for mc with the following command
 # mc alias set s3e2bucket  https://e2.idrivee2-18.com access_key  secret_key
-mc cp -a your-video/* s3e2bucket/your-video.mp4/
-rm -rf your-video
+mc cp -a your-video/* s3e2bucket/bucket_name/your-video.mp4/
+rm -rf your-video.mp4
 ```
 
 For multiple files using a pattern, you can use the following command:
